@@ -1,0 +1,12 @@
+const t=require('node:test'),a=require('node:assert');const{parseCSV,build}=require('../src/data/loader'),{make}=require('./fixtures');
+t.test('CSV با کوتیشن و ویرگول',()=>a.deepEqual(parseCSV('a,b\n"x,y","q""z"\n'),[['a','b'],['x,y','q"z']]));
+const d=build(make());
+t.test('نگاشت ستون‌های shops: حل‌شده/مفقود/ناشناخته گزارش می‌شود',()=>{const s=d.report.tables.shops;a.equal(s.resolved.name,'shop_name');a.equal(s.resolved.lat,'latitude');a.ok(s.missingFields.includes('phone')&&s.missingFields.includes('installment'));a.deepEqual(s.unknownColumns,['weird_col'])});
+t.test('پیوند با شناسه و حذف آفر یتیم/قیمت نامعتبر',()=>{a.equal(d.report.issues.orphanOffers,2);a.equal(d.report.issues.badPrice,1);a.equal(d.offers.length,4);a.equal(d.offers.find(o=>o.shop==='S2').price,1300000);a.equal(d.offers.find(o=>o.price===1200000).updated,'2026-10-20T10:00:00.000Z')});
+t.test('تاریخ نامعتبر → null، نه خطا',()=>a.equal(d.offers.find(o=>o.price===1300000).updated,null));
+t.test('محصول تکراری/بی‌شناسه و specs خراب',()=>{a.equal(d.report.issues.badProducts,2);a.equal(d.report.issues.badSpecs,1);a.ok(d.products.find(p=>p.id==='3')&&d.products.find(p=>p.id==='3').ram===undefined)});
+t.test('استخراج specs: رنگ، رم، حافظه با ارقام یکسان‌شده',()=>{const p=d.products.find(x=>x.id==='1');a.equal(p.color,'آبی');a.equal(p.ram,'8 گیگابایت');a.equal(d.products.find(x=>x.id==='2').ram,'8 گیگابایت');a.equal(p.image,'https://x/a.jpg')});
+t.test('فیلتر پویا: فقط ویژگی‌های واقعاً موجود',()=>{const k=d.registry.cats['گوشی'].steps.map(s=>s[0]);a.ok(k.includes('brand')&&k.includes('color')&&k.includes('ram')&&k.includes('storage'));const x=d.registry.cats['گوشی'].steps.find(s=>s[1]==='نمایشگر');a.ok(x&&/^x\d+$/.test(x[0]))});
+t.test('مختصات نامعتبر و ساعت خراب → null/نامشخص',()=>{const s2=d.shops.find(s=>s.id==='S2'),s1=d.shops.find(s=>s.id==='S1');a.equal(s2.lat,null);a.equal(s2.name,'نامشخص');a.equal(s1.hours,undefined);a.equal(d.report.issues.badCoords,1);a.equal(d.shops.length,2)});
+t.test('ستون ضروری مفقود → گزارش خطا، بدون کرش',()=>{const r=make();r.offers.cols=r.offers.cols.filter(c=>c!=='price_toman');const x=build(r);a.equal(x.report.ok,false);a.ok(x.report.errors[0].includes('price_toman'))});
+t.test('mapping.json می‌تواند نام ستون shops را بازنویسی کند',()=>{const x=build(make(),{schema:{SHOPS:{name:['weird_col']}}});a.equal(x.report.tables.shops.resolved.name,'weird_col')});
