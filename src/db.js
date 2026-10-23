@@ -77,14 +77,58 @@ async function importTable(pool, name, { cols, rows }, { indexes = [] } = {}) {
   const c = pool.connect ? await pool.connect() : pool;
   try {
     await c.query('BEGIN');
-    await c.query('DROP TABLE IF EXISTS ' + qi(name));
-    await c.query('CREATE TABLE ' + qi(name) + '(' + cols.map(x => qi(x) + ' TEXT').join(',') + ')');
+    // ابتدا داده را در جدول موقتِ staging بارگذاری می‌کنیم؛ جدول قبلی تا پایان بارگذاری دست‌نخورده می‌ماند.
+    const staging = name + '_staging';
+    await c.query('DROP TABLE IF EXISTS ' + qi(staging));
+    await c.query('CREATE TABLE ' + qi(staging) + '(' + cols.map(x => qi(x) + ' TEXT').join(',') + ')');
     const per = Math.max(1, Math.floor(60000 / cols.length));
     for (let i = 0; i < rows.length; i += per) {
       const chunk = rows.slice(i, i + per), params = [];
-      const values = chunk.map(r => '(' + cols.map(col => { params.push(r[col] == null ? null : String(r[col])); return '$' + params.length; }).join(',') + ')').join(',');
-      await c.query('INSERT INTO ' + qi(name) + '(' + cols.map(qi).join(',') + ') VALUES ' + values, params);
+      const values = chunk.map(r => '(' + cols.map(col => { params.push(r[col] == null ? null : String(r[col])); return '
+  } catch (e) { try { await c.query('ROLLBACK'); } catch { /* ignore */ } throw e; }
+  finally { if (c.release) c.release(); }
+}
+
+// ---- ذخیره‌ی پرسش‌ها / پیگیری‌ها ----
+const PUB = r => ({ id: Number(r.id), client: r.client_id, shop: r.shop_id, product: r.product_id, topic: r.topic, message: r.message, channel: r.channel, status: r.status, reason: r.reason, availability: r.availability, answer: r.answer, created: r.created_at instanceof Date ? r.created_at.toISOString() : r.created_at, updated: r.updated_at instanceof Date ? r.updated_at.toISOString() : r.updated_at });
+
+function memoryStore() {
+  const rows = []; let seq = 0;
+  return {
+    kind: 'memory',
+    async add(x) { const now = new Date().toISOString(); const r = { id: ++seq, client: x.client, shop: x.shop, product: x.product, topic: x.topic, message: x.message || null, channel: x.channel || null, status: x.status, reason: x.reason || null, availability: null, answer: null, created: now, updated: now }; rows.push(r); if (rows.length > 5000) rows.shift(); return { ...r }; },
+    async list(client) { return rows.filter(r => r.client === client).slice(-50).reverse().map(r => ({ ...r })); },
+    async update(id, client, patch) { const r = rows.find(x => x.id === id && x.client === client); if (!r) return null; Object.assign(r, patch, { updated: new Date().toISOString() }); return { ...r }; }
+  };
+}
+
+function pgStore(pool) {
+  const cols = 'id,client_id,shop_id,product_id,topic,message,channel,status,reason,availability,answer,created_at,updated_at';
+  return {
+    kind: 'postgres',
+    async add(x) {
+      const r = await pool.query(`INSERT INTO inquiries(client_id,shop_id,product_id,topic,message,channel,status,reason) VALUES($1,$2,$3,$4,$5,$6,$7,$8) RETURNING ${cols}`,
+        [x.client, x.shop, x.product, x.topic, x.message || null, x.channel || null, x.status, x.reason || null]);
+      return PUB(r.rows[0]);
+    },
+    async list(client) { const r = await pool.query(`SELECT ${cols} FROM inquiries WHERE client_id=$1 ORDER BY created_at DESC LIMIT 50`, [client]); return r.rows.map(PUB); },
+    async update(id, client, patch) {
+      const sets = [], vals = [id, client];
+      for (const [k, v] of Object.entries(patch)) { if (!['status', 'availability', 'answer', 'channel'].includes(k)) continue; vals.push(v); sets.push(k + '=$' + vals.length); }
+      if (!sets.length) return null;
+      const r = await pool.query(`UPDATE inquiries SET ${sets.join(',')}, updated_at=now() WHERE id=$1 AND client_id=$2 RETURNING ${cols}`, vals);
+      return r.rows[0] ? PUB(r.rows[0]) : null;
     }
+  };
+}
+
+module.exports = { config, createPool, migrate, loadRaw, importTable, memoryStore, pgStore, PREFIX, TABLES, ENV };
+ + params.length; }).join(',') + ')').join(',');
+      await c.query('INSERT INTO ' + qi(staging) + '(' + cols.map(qi).join(',') + ') VALUES ' + values, params);
+    }
+    // تعویض اتمیک در همان تراکنش؛ در صورت شکست، ROLLBACK جدول قبلی را برمی‌گرداند.
+    await c.query('DROP TABLE IF EXISTS ' + qi(name));
+    await c.query('ALTER TABLE ' + qi(staging) + ' RENAME TO ' + qi(name));
     for (const col of new Set(indexes)) if (cols.includes(col)) await c.query('CREATE INDEX ' + qi(name + '_' + col + '_idx') + ' ON ' + qi(name) + '(' + qi(col) + ')');
     await c.query('COMMIT');
     return rows.length;
