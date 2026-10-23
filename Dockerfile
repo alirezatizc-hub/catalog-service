@@ -11,4 +11,5 @@ EXPOSE 3000
 USER node
 HEALTHCHECK --interval=30s --timeout=5s --start-period=40s --retries=3 \
   CMD node -e "fetch('http://127.0.0.1:'+(process.env.PORT||3000)+'/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
-CMD ["node","server.js"]
+# سقف heap برای دیتاست کامل؛ با NODE_HEAP_MB قابل تغییر است
+CMD ["sh","-c","exec node --max-old-space-size=${NODE_HEAP_MB:-384} --max-semi-space-size=8 server.js"]

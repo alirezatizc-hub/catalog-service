@@ -92,18 +92,26 @@ class Index {
   constructor({ products, shops, offers }) {
     this.P = new Map(products.map(p => [p.id, p]));
     this.S = new Map(shops.map(s => [s.id, s]));
+    // آفِرها یا «انبار ستونی» (OfferStore) هستند یا آرایهٔ ساده (تست/فایل کوچک).
+    // در حالت ستونی، byP فقط اندیس‌های عددی را نگه می‌دارد و آبجکت آفِر
+    // فقط برای ردیف‌های نمایش‌داده‌شده ساخته می‌شود.
+    this.store = offers && offers.isOfferStore ? offers : null;
+    this.legacyOffers = this.store ? null : (offers || []);
+    this.offerCount = this.store ? this.store.length : this.legacyOffers.length;
     this.byP = new Map(); this.dropped = 0;
-    for (const o of offers) {
-      if (!this.P.has(o.product) || !this.S.has(o.shop) || !(o.price > 0)) { this.dropped++; continue; }
-      if (!this.byP.has(o.product)) this.byP.set(o.product, []);
-      this.byP.get(o.product).push(o);
+    for (let i = 0; i < this.offerCount; i++) {
+      const pid = this._offerProduct(i), sid = this._offerShop(i);
+      if (!this.P.has(pid) || !this.S.has(sid) || !(this._offerPrice(i) > 0)) { this.dropped++; continue; }
+      const l = this.byP.get(pid); if (l) l.push(i); else this.byP.set(pid, [i]);
     }
     // ایندکس‌ها: items = محصولات دارای آفر به ترتیب درج؛ همه‌ی لیست‌ها بر حسب اندیس items مرتب‌اند
     this.items = []; this.nShops = []; this.catIdx = new Map();
     for (const p of this.P.values()) {
       const os = this.byP.get(p.id); if (!os) continue;
       const i = this.items.length;
-      this.items.push(p); this.nShops.push(new Set(os.map(o => o.shop)).size);
+      this.items.push(p);
+      const shopsOf = new Set(); for (const x of os) shopsOf.add(this._offerShop(x));
+      this.nShops.push(shopsOf.size);
       let l = this.catIdx.get(p.cat); if (!l) this.catIdx.set(p.cat, l = []);
       l.push(i);
     }
@@ -111,7 +119,12 @@ class Index {
     // فروشگاه‌ها با مختصات، برای پیشنهاد پاساژ/بازار نزدیک و فروشگاه‌های هم‌محدوده
     this.geoShops = shops.filter(s => valid(s));
   }
-  shopCount(pid) { return new Set((this.byP.get(pid) || []).map(o => o.shop)).size; }
+  offerAt(i) { return this.store ? this.store.at(i) : this.legacyOffers[i]; }
+  offerList(pid) { return (this.byP.get(pid) || []).map(i => this.offerAt(i)); }
+  _offerProduct(i) { return this.store ? this.store.productIdAt(i) : this.legacyOffers[i].product; }
+  _offerShop(i) { return this.store ? this.store.shopIdAt(i) : this.legacyOffers[i].shop; }
+  _offerPrice(i) { return this.store ? this.store.priceAt(i) : this.legacyOffers[i].price; }
+  shopCount(pid) { const s = new Set(); for (const i of this.byP.get(pid) || []) s.add(this._offerShop(i)); return s.size; }
   _allIdx() { return this._all || (this._all = this.items.map((_, i) => i)); }
   _attrIdx(key) {
     let m = this._attr.get(key); if (m) return m;
@@ -119,7 +132,21 @@ class Index {
     this.items.forEach((p, i) => { const v = p[key]; if (v == null) return; const k = String(v); let l = m.get(k); if (!l) m.set(k, l = []); l.push(i); });
     this._attr.set(key, m); return m;
   }
-  _hayArr() { return this._hay || (this._hay = this.items.map(p => nm([p.title_fa, p.title_en, p.brand, p.model, p.color, p.cat].filter(Boolean).join(' ')))); }
+  // متنِ نرمال‌شده برای جست‌وجوی متنی. برای کاتالوگ بزرگ (دیتاست چالش) این آرایه
+  // نگه داشته نمی‌شود؛ ۲۲۵ هزار رشتهٔ اضافی حدود ۳۵ مگابایت بود. محاسبه در هر
+  // پرس‌وجو چند ده میلی‌ثانیه است، ولی حافظهٔ دائمی صفر.
+  _hayText(i) { const p = this.items[i]; return nm([p.title_fa, p.title_en, p.brand, p.model, p.color, p.cat].filter(Boolean).join(' ')); }
+  _hayArr() {
+    if (this._hay) return this._hay;
+    if (process.env.HAY_CACHE === '0') return null;
+    // کش کردن متن نرمال‌شده سرعت جست‌وجو را چند برابر می‌کند ولی ۳۵ مگابایت حافظه
+    // می‌خواهد؛ فقط وقتی کش می‌کنیم که سقف heap واقعاً جا داشته باشد.
+    const cost = this.items.length * 220;
+    const hv = require('v8').getHeapStatistics();
+    const free = hv.heap_size_limit - hv.used_heap_size;
+    if (cost > 8 * 1048576 && free < cost * 2) return null;
+    return (this._hay = this.items.map((_, i) => this._hayText(i)));
+  }
   candIdx({ cat, sel = {}, q } = {}) {
     const lists = [];
     if (cat) lists.push(this.catIdx.get(cat) || []);
@@ -128,7 +155,13 @@ class Index {
     if (!lists.length) r = this._allIdx();
     else { lists.sort((a, b) => a.length - b.length); r = lists[0]; for (let i = 1; i < lists.length && r.length; i++) r = intersect(r, lists[i]); }
     const t = q ? tok(q) : [];
-    if (t.length) { const H = this._hayArr(); r = r.filter(i => { const h = H[i]; return t.every(w => h.includes(w)); }); }
+    if (t.length) {
+      const H = this._hayArr();
+      r = r.filter(i => {
+        const h = H ? H[i] : this._hayText(i);
+        return t.every(w => h.includes(w));
+      });
+    }
     return r;
   }
   cands(f = {}) { return this.candIdx(f).map(i => this.items[i]); }
@@ -148,7 +181,8 @@ class Index {
     const tn = tehranNow(o.now || new Date());
     const product = this.P.get(pid);
     let out = [];
-    for (const of of this.byP.get(pid) || []) {
+    for (const i of this.byP.get(pid) || []) {
+      const of = this.offerAt(i);
       const s = this.S.get(of.shop);
       if (!s) continue;
       const d = valid(o.loc) && valid(s) ? hav(o.loc, s) : null;
@@ -180,7 +214,7 @@ class Index {
     const os = this.byP.get(pid) || [];
     if (!os.length) return { minPrice: null, maxPrice: null, shops: 0 };
     let lo = Infinity, hi = 0;
-    for (const o of os) { if (o.price < lo) lo = o.price; if (o.price > hi) hi = o.price; }
+    for (const i of os) { const pr = this._offerPrice(i); if (pr < lo) lo = pr; if (pr > hi) hi = pr; }
     return { minPrice: lo, maxPrice: hi, shops: this.shopCount(pid) };
   }
   alternatives(pid, o) {
