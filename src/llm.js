@@ -22,7 +22,7 @@ async function understand(ix, message) {
         temperature: 0,
         max_tokens: 350,
         messages: [
-          { role: 'system', content: 'به‌عنوان تحلیلگر جست‌وجوی فروشگاه، فقط JSON معتبر با کلیدهای cat, sel, filters, reply بده. فقط مقادیر موجود در متن کاربر را استخراج کن؛ اگر مطمئن نیستی مقدار را حذف کن. filters فقط min,max,inst,open,sort را شامل شود.' },
+          { role: 'system', content: 'دستیار فارسی خرید حضوری هستی. همیشه فقط JSON معتبر با کلیدهای cat, sel, filters, reply برگردان. اگر کاربر سلام یا احوال‌پرسی کرد یا پیام عمومی غیرمحصولی داد، با فارسی طبیعی و کوتاه پاسخ بده، cat را null و sel و filters را خالی بگذار و reply را پر کن. اگر درخواست جست‌وجوی محصول بود، فقط مقادیر موجود در متن را استخراج کن؛ اگر مطمئن نیستی مقدار را حذف کن. filters فقط min,max,inst,open,sort را شامل شود.' },
           { role: 'user', content: String(message).slice(0, 300) }
         ]
       })
