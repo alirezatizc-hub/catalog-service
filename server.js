@@ -5,6 +5,7 @@ const { loadDir, createBuilder, loadMapping } = require('./src/data/loader');
 const db = require('./src/db'), llm = require('./src/llm'), geo = require('./src/geo'), nlu = require('./src/nlu');
 const { buildInsight } = require('./src/insight');
 const { advise, planTrip, hubsOf, etaOf } = require('./src/advice');
+const { diagnose } = require('./src/diagnose');
 
 const PUB = path.join(__dirname, 'public');
 const TYPES = { '.html': 'text/html;charset=utf-8', '.js': 'text/javascript;charset=utf-8', '.css': 'text/css;charset=utf-8', '.json': 'application/json', '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon', '.woff2': 'font/woff2' };
@@ -48,6 +49,34 @@ function jsonOut(r, c, o) {
     body = zlib.gzipSync(body); h['content-encoding'] = 'gzip'; h.vary = 'accept-encoding';
   }
   r.writeHead(c, h); r.end(body);
+}
+function htmlOut(r, c, html) {
+  r.writeHead(c, { 'content-type': 'text/html;charset=utf-8', 'cache-control': 'no-store', ...secHeaders() });
+  r.end(html);
+}
+// صفحه‌ی /doctor: همان گزارش JSON، به‌صورت خوانا و بدون هیچ رمزی
+function doctorPage(d) {
+  const E = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const T = { pass: ['✅', 'ok'], fail: ['❌', 'bad'], warn: ['⚠️', 'warn'] };
+  const rows = (d.checks || []).map(c => {
+    const [ic, cls] = T[c.status] || ['•', ''];
+    return `<li class="chk"><div class="row"><span class="tag ${cls}">${ic} ${E(c.label)}</span></div>
+     ${c.detail ? `<div class="hint">${E(c.detail)}</div>` : ''}
+     ${c.hint ? `<div class="box-warn">${E(c.hint)}</div>` : ''}</li>`;
+  }).join('');
+  const steps = (d.nextSteps || []).map(x => `<li>${E(x)}</li>`).join('');
+  return `<!doctype html><html lang="fa" dir="rtl"><head><meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>عیب‌یابی اتصال و دیتاست — ترب‌یار</title>
+  <link rel="stylesheet" href="/app.css"></head><body class="doctor">
+  <main class="wrap">
+    <h1>${d.ok ? '✅ همه‌چیز آماده است' : '❌ هنوز آماده نیست'}</h1>
+    <p class="hint">زمان بررسی: ${E(new Date(d.at || Date.now()).toLocaleString('fa-IR', { timeZone: 'Asia/Tehran' }))} · منبع: ${E(d.source || '—')} · آماده: ${d.ready ? 'بله' : 'خیر'}</p>
+    <ol class="chks">${rows || '<li class="chk">بررسی‌ای اجرا نشد.</li>'}</ol>
+    ${steps ? `<h2>قدم بعدی</h2><ul class="warns">${steps}</ul>` : ''}
+    <div class="ch-row"><a class="btn" href="/">بازگشت به اپ</a><a class="btn ghost" href="/api/diagnose">همین گزارش به‌صورت JSON</a><a class="btn ghost" href="/api/status">/api/status</a></div>
+    <p class="hint">هیچ رمز یا رشته‌ی اتصالی در این صفحه نمایش داده نمی‌شود؛ فقط نام متغیرها و نتیجه‌ی بررسی‌ها.</p>
+  </main></body></html>`;
 }
 function serveStatic(req, r, p) {
   const f = path.resolve(PUB, '.' + (p === '/' ? '/index.html' : decodeURIComponent(p)));
@@ -156,12 +185,24 @@ function createServer(initialData, opts = {}) {
         loadMs: state.loadedAt ? state.loadedAt - state.startedAt : null,
         memoryMb: Math.round(process.memoryUsage().rss / 1048576),
         env: db.envReport(), db: state.dbInfo, counts: state.data ? state.data.report.counts : null,
+        storeFallback: !!state.storeFallbackReason, hint: state.dbInfo ? state.dbInfo.hint || null : null,
         mapping: state.data ? state.data.report.tables : null, issues: state.data ? state.data.report.issues : null,
         node: process.version
       });
     }
     if (p === '/api/meta') return send(r, 200, meta());
 
+    if (p === '/api/diagnose' || p === '/doctor') {
+      const want = process.env.DIAG_TOKEN;
+      const got = g('token') || (q.headers['x-diag-token'] || '');
+      const allowed = !want || got === want;
+      if (!allowed) return send(r, 403, { error: 'forbidden', hint: 'برای دیدن این گزارش ?token=… لازم است (DIAG_TOKEN).' });
+      let out;
+      try { out = await diagnose({ pool: state.pool || null, state, env: process.env }); }
+      catch (e) { out = { ok: false, checks: [], error: db.scrub(e.message), nextSteps: ['خطای غیرمنتظره در عیب‌یابی؛ لاگ اپ را ببینید.'] }; }
+      if (p === '/doctor') return htmlOut(r, 200, doctorPage(out));
+      return send(r, 200, out);
+    }
     if (p.startsWith('/api/') && !state.ix) {
       if (['/api/health', '/api/status', '/api/meta'].includes(p)) return;
       return notReady(r);
