@@ -58,14 +58,29 @@ async function migrate(pool) { for (const sql of MIGRATIONS) await pool.query(sq
 
 // ---- خواندن دیتاست از PostgreSQL به همان شکل {cols, rows} که loader از CSV می‌سازد ----
 async function loadRaw(pool, env = process.env) {
-  const out = {}, pre = PREFIX(env);
+  const configured = PREFIX(env);
+  // Prefer explicit prefix, but also detect common unprefixed tables when data was imported manually.
+  const prefixes = [...new Set([configured, '', 'torob_', 'torob_assistant_'])];
+  let selected = null;
+  for (const pre of prefixes) {
+    let found = true;
+    for (const t of TABLES) {
+      const ex = await pool.query('SELECT to_regclass($1) AS r', ['public.' + pre + t]);
+      if (!ex.rows[0] || !ex.rows[0].r) { found = false; break; }
+    }
+    if (found) { selected = pre; break; }
+  }
+  if (selected == null) {
+    const listed = await pool.query("SELECT tablename FROM pg_tables WHERE schemaname='public' ORDER BY tablename");
+    console.error('[db] no recognized dataset tables; expected products/offers/shops with prefixes:', prefixes, 'available tables:', listed.rows.map(r => r.tablename));
+    return null;
+  }
+  if (selected !== configured) console.log('[db] detected dataset table prefix:', selected || '(none)');
+  const out = {};
   for (const t of TABLES) {
-    const name = pre + t;
-    const ex = await pool.query('SELECT to_regclass($1) AS r', ['public.' + name]);
-    if (!ex.rows[0] || !ex.rows[0].r) return null;
+    const name = selected + t;
     const r = await pool.query('SELECT * FROM ' + qi(name));
-    if (!r.rows.length) return null;
-    const cols = r.fields ? r.fields.map(f => f.name) : Object.keys(r.rows[0]);
+    const cols = r.fields ? r.fields.map(f => f.name) : (r.rows[0] ? Object.keys(r.rows[0]) : []);
     out[t] = { cols, rows: r.rows.map(row => Object.fromEntries(cols.map(c => [c, cell(row[c])]))) };
   }
   return out;
