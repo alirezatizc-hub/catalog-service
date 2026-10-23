@@ -3,7 +3,8 @@ main = "worker.js"
 compatibility_date = "2026-10-23"
 compatibility_flags = ["nodejs_compat"]
 
-# Configure this binding after creating a Hyperdrive connection for the Liara PostgreSQL database.
+# Stage 1 migration: static assets are deliberately disabled until the API worker is complete.
+# Configure the Hyperdrive ID after creating the Liara PostgreSQL connection.
 [[hyperdrive]]
 binding = "HYPERDRIVE"
 id = "REPLACE_WITH_LIARA_POSTGRES_HYPERDRIVE_ID"
