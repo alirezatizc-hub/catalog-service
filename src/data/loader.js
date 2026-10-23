@@ -6,6 +6,12 @@ const lat=s=>String(s).replace(/[۰-۹]/g,d=>'۰۱۲۳۴۵۶۷۸۹'.indexOf(d)).
 // val: متن خام (نام/عنوان/آدرس/گارانتی بدون تغییر ارقام)؛ sv: مقدار مشخصه با ارقام یکسان‌شده برای ادغام گزینه‌ها
 const val=v=>{if(v==null)return null;const s=String(Array.isArray(v)?v.join('، '):v).replace(/\s+/g,' ').trim();return s?s:null},sv=v=>{const s=val(v);return s&&lat(s)};
 const bool=v=>v==null?null:/^(1|true|yes|بله)$/i.test(String(v).trim())?true:/^(0|false|no|خیر)$/i.test(String(v).trim())?false:null;
+// نشانی دقیق داخل پاساژ: پاساژ/مجتمع، طبقه، واحد را از متن آدرس و توضیحات مکان درمی‌آورد (فقط هرچه واقعاً نوشته شده)
+function placeOf(...texts){const t=lat(texts.filter(Boolean).join('، ')).replace(/\s+/g,' ');if(!t)return null;
+ const mall=(t.match(/(?:پاساژ|مجتمع|مرکز خرید|مجموعه|برج|بازار|راسته)\s*[^،,\-–|\n]{1,30}/)||[])[0],floor=(t.match(/طبقه\s*[^\s،,\-–|]+(?:\s*(?:منفی|همکف|اول|دوم|سوم|چهارم|پنجم))?/)||[])[0],unit=(t.match(/(?:واحد|پلاک|مغازه)\s*[\d]+[^\s،,]*/)||[])[0];
+ const pd=x=>x&&x.trim().replace(/\d/g,d=>'۰۱۲۳۴۵۶۷۸۹'[d]),r={mall:pd(mall),floor:pd(floor),unit:pd(unit)};return r.mall||r.floor||r.unit?r:null}
+// لینک امن: فقط http(s)؛ اینستاگرام می‌تواند فقط نام کاربری باشد
+function urlOf(v,kind){const s=val(v);if(!s)return null;if(/^https?:\/\//i.test(s))return s.slice(0,300);if(kind==='instagram'){const u=s.replace(/^@/,'').replace(/^(?:www\.)?instagram\.com\//i,'').replace(/\/.*$/,'');return/^[A-Za-z0-9._]{1,30}$/.test(u)?'https://instagram.com/'+u:null}if(/^[\w.-]+\.[a-z]{2,}(\/\S*)?$/i.test(s))return'https://'+s.slice(0,300);return null}
 function json(v){if(v==null)return{v:null};if(typeof v!=='string')return{v};try{return{v:JSON.parse(v)}}catch{return{err:1}}}
 function hoursOf(v){const j=json(v);if(j.err||j.v==null)return undefined;const a=j.v;if(!Array.isArray(a)||a.length!==7)return undefined;
  return a.map(d=>{if(d===null)return null;if(Array.isArray(d)&&d.length===2&&d.every(Number.isFinite))return d;if(typeof d==='string'){const m=lat(d).match(/(\d{1,2})(?::(\d\d))?\s*[-–]\s*(\d{1,2})(?::(\d\d))?/);if(m)return[+m[1]+(+m[2]||0)/60,+m[3]+(+m[4]||0)/60]}return undefined})}
@@ -33,7 +39,7 @@ function build(raw,{schema=S,demo=false}={}){
  const shops=[],sid=new Set(),SR=shr.resolved,g=(r,k)=>SR[k]?r[SR[k]]:null;
  for(const r of raw.shops.rows){const id=val(r[SR.id]);if(!id||sid.has(id)){rep.issues.badShops++;continue}let la=null,ln=null;if(SR.lat&&SR.lng){la=parseFloat(lat(g(r,'lat')));ln=parseFloat(lat(g(r,'lng')));if(!(Math.abs(la)<=90)||!(Math.abs(ln)<=180)){la=ln=null;rep.issues.badCoords++}}
   const hrs=hoursOf(g(r,'hours'));if(g(r,'hours')!=null&&hrs===undefined)rep.issues.badHours++;sid.add(id);
-  shops.push({id,name:val(g(r,'name'))||'نامشخص',mall:val(g(r,'address')),lat:la,lng:ln,hours:hrs,installment:bool(g(r,'installment')),torobpay:bool(g(r,'torobpay')),kalabarg:bool(g(r,'kalabarg')),express:bool(g(r,'express')),tel:val(g(r,'phone')),wa:val(g(r,'whatsapp')),bale:val(g(r,'bale')),demo})}
+  shops.push({id,name:val(g(r,'name'))||'نامشخص',mall:val(g(r,'address')),lat:la,lng:ln,hours:hrs,installment:bool(g(r,'installment')),torobpay:bool(g(r,'torobpay')),kalabarg:bool(g(r,'kalabarg')),express:bool(g(r,'express')),tel:val(g(r,'phone')),wa:val(g(r,'whatsapp')),bale:val(g(r,'bale')),place:placeOf(val(g(r,'address')),val(g(r,'place_desc'))),ig:urlOf(g(r,'instagram'),'instagram'),web:urlOf(g(r,'website'),'web'),demo})}
  // محصولات + استخراج specs
  const parsed=[],pid=new Set(),keyCount=new Map(),matched=new Set();
  for(const r of raw.products.rows){const id=val(r[PC.id]);if(!id||pid.has(id)||!(val(r[PC.title_fa])||val(r[PC.model]))){rep.issues.badProducts++;continue}pid.add(id);
@@ -62,6 +68,10 @@ function build(raw,{schema=S,demo=false}={}){
  rep.counts={products:products.length,shops:shops.length,offers:offers.length};
  return{products:products.map(([p])=>p),shops,offers,registry:{cats},report:rep}}
 function readTable(dir,name){for(const ext of['csv','json']){const f=path.join(dir,name+'.'+ext);if(!fs.existsSync(f))continue;const t=fs.readFileSync(f,'utf8');if(ext==='csv')return csvRows(t);const a=JSON.parse(t);const cols=[...new Set(a.flatMap(Object.keys))];return{cols,rows:a.map(o=>Object.fromEntries(cols.map(c=>[c,o[c]==null||o[c]===''?null:typeof o[c]==='object'?JSON.stringify(o[c]):String(o[c])])))}}return null}
+function loadMapping(dir){let schema={};const mf=path.join(dir,'mapping.json');if(fs.existsSync(mf)){try{schema=JSON.parse(fs.readFileSync(mf,'utf8'))}catch(e){return{error:e.message}}}return{schema}}
+const badMapping=e=>({products:[],shops:[],offers:[],registry:{cats:{}},report:{ok:false,errors:['mapping.json نامعتبر است: '+e],warnings:[],tables:{},issues:{},specs:{}}});
 function loadDir(dir){const raw={products:readTable(dir,'products'),offers:readTable(dir,'offers'),shops:readTable(dir,'shops')};if(!raw.products||!raw.offers||!raw.shops)return null;
- let schema={};const mf=path.join(dir,'mapping.json');if(fs.existsSync(mf)){try{schema=JSON.parse(fs.readFileSync(mf,'utf8'))}catch(e){return{products:[],shops:[],offers:[],registry:{cats:{}},report:{ok:false,errors:['mapping.json نامعتبر است: '+e.message],warnings:[],tables:{},issues:{},specs:{}}}}}return build(raw,{schema})}
-module.exports={parseCSV,csvRows,build,loadDir,resolveCols,validateSchema};
+ const m=loadMapping(dir);if(m.error)return badMapping(m.error);return build(raw,{schema:m.schema})}
+// دیتای خام (مثلاً از PostgreSQL) + نگاشت اختیاری data/mapping.json
+function fromRaw(raw,dir){const m=dir?loadMapping(dir):{schema:{}};if(m.error)return badMapping(m.error);return build(raw,{schema:m.schema})}
+module.exports={parseCSV,csvRows,build,loadDir,fromRaw,readTable,resolveCols,validateSchema,placeOf,urlOf};
