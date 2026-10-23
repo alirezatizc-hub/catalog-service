@@ -141,6 +141,8 @@ function hintFor(code, message = '') {
   if (/password|authentication/i.test(m)) return 'احراز هویت دیتابیس رد شد؛ مقدار PG_URI/DATABASE_URL را بررسی کنید.';
   if (/permission denied/i.test(m)) return 'دسترسی کافی نیست؛ مالک/مجوز جدول‌ها را بررسی کنید.';
   if (c === 'dataset_not_available') return 'نه دیتابیس جواب داد و نه فایل محلی معتبری در DATA_DIR بود.';
+  if (/is not iterable/i.test(m)) return 'نسخه‌ی اپ قدیمی است (باگ خواندن صفحه‌ای جدول‌ها)؛ این نسخه رفعش کرده — اپ را دوباره دیپلوی کنید.';
+  if (c === 'db_read_failed') return 'دیتابیس وصل شد ولی خواندن جدول‌ها شکست خورد. ستون‌های شناسه/قیمت و متن خطا را در /api/status ببینید.';
   return null;
 }
 
@@ -217,16 +219,43 @@ function detectDatasetTables(map, prefix = '') {
 /* ───────── خواندن صفحه‌به‌صفحه در ساختن ایندکس ───────── */
 async function* pageRows(pool, table, cols, idCol, pageSize = 20000) {
   const list = cols.map(qi).join(',');
+  const idIdx = cols.indexOf(idCol);
+  // pg از rowMode:'array' پشتیبانی می‌کند (سبک‌تر). اگر درایور/پروکسی آن را نپذیرد،
+  // یک‌بار با ردیف‌های شیئی ادامه می‌دهیم تا خواندن دیتاست متوقف نشود.
+  let mode = 'array';
+  const fetchPage = async (last) => {
+    const cfg = last == null
+      ? { text: `SELECT ${list} FROM ${qi(table)} ORDER BY ${qi(idCol)} LIMIT $1`, values: [pageSize] }
+      : { text: `SELECT ${list} FROM ${qi(table)} WHERE ${qi(idCol)} > $1 ORDER BY ${qi(idCol)} LIMIT $2`, values: [last, pageSize] };
+    try {
+      return await pool.query(mode === 'array' ? { ...cfg, rowMode: 'array' } : cfg);
+    } catch (e) {
+      if (mode === 'array' && /rowmode/i.test(String(e && e.message))) {
+        mode = 'object';
+        console.error(JSON.stringify({ event: 'page_rows_object_mode', reason: 'rowMode_not_supported' }));
+        return await pool.query(cfg);
+      }
+      throw e;
+    }
+  };
   let last = null;
   for (;;) {
-    const r = last == null
-      ? await pool.query({ text: `SELECT ${list} FROM ${qi(table)} ORDER BY ${qi(idCol)} LIMIT $1`, values: [pageSize], rowMode: 'array' })
-      : await pool.query({ text: `SELECT ${list} FROM ${qi(table)} WHERE ${qi(idCol)} > $1 ORDER BY ${qi(idCol)} LIMIT $2`, values: [last, pageSize], rowMode: 'array' });
+    const r = await fetchPage(last);
     if (!r.rows.length) return;
-    last = r.rows[r.rows.length - 1][cols.indexOf(idCol)];
-    for (const arr of r.rows) {
+    const first = r.rows[0];
+    const pick = Array.isArray(first)
+      ? (arr, i) => arr[i]
+      : (obj, i) => obj[cols[i]];
+    const keyOf = Array.isArray(first)
+      ? (arr) => arr[idIdx]
+      : (obj) => obj[idCol];
+    last = keyOf(r.rows[r.rows.length - 1]);
+    for (const row of r.rows) {
       const o = {};
-      for (let i = 0; i < cols.length; i++) o[cols[i]] = arr[i] instanceof Date ? arr[i].toISOString() : (arr[i] == null ? null : String(arr[i]));
+      for (let i = 0; i < cols.length; i++) {
+        const v = pick(row, i);
+        o[cols[i]] = v instanceof Date ? v.toISOString() : (v == null ? null : String(v));
+      }
       yield o;
     }
     if (r.rows.length < pageSize) return;

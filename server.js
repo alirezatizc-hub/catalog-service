@@ -466,7 +466,9 @@ async function loadDataset({ onState } = {}) {
             const idCol = ['shop_id', 'product_id', 'offer_id', 'source_id', 'id'].find(c => columns.includes(c));
             if (!idCol) throw new Error('ستون شناسه در ' + table + ' پیدا نشد');
             const t = Date.now();
-            builder['add' + role[0].toUpperCase() + role.slice(1)](db.pageRows(pool, table, columns, idCol), columns);
+            // pageRows یک AsyncIterator است؛ add* هر دو حالت آرایه و جریان را می‌پذیرد
+            const add = builder['add' + role[0].toUpperCase() + role.slice(1)];
+            await add(db.pageRows(pool, table, columns, idCol), columns);
             console.log(JSON.stringify({ event: 'table_loaded', role, table, rows: builder.report.tables[role].rows, ms: Date.now() - t }));
             onState && onState({ stage: 'table', role, rows: builder.report.tables[role].rows });
           }

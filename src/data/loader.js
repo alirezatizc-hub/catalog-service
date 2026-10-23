@@ -263,6 +263,16 @@ function validateSchema(sc, SC) {
   return w;
 }
 
+// هر ردیف را می‌پیماید؛ هم آرایه (فایل CSV/JSON) و هم AsyncIterator (صفحه‌بندی PostgreSQL).
+// برای آرایه همگام (و مقدار بازگشتی undefined) است و برای جریان ناهمگام یک Promise برمی‌گرداند.
+function eachRow(rows, fn) {
+  if (rows && typeof rows[Symbol.asyncIterator] === 'function') {
+    return (async () => { for await (const r of rows) fn(r); })();
+  }
+  for (const r of rows) fn(r);
+  return undefined;
+}
+
 /* ───────── ساخت داده (بدون نگه‌داشتن نسخه‌ی خام) ───────── */
 const REQUIRED = { products: ['id', 'title_fa'], offers: ['product', 'shop', 'price'], shops: ['id'] };
 const TABLE_LABEL = { products: 'محصولات', offers: 'آفرها', shops: 'فروشگاه‌ها' };
@@ -318,11 +328,11 @@ function createBuilder({ schema = {} } = {}) {
     const R = cols('shops', columns);
     const t = rep.tables.shops;
     const g = (r, k) => (R[k] ? r[R[k]] : null);
-    for (const r of rows) {
+    const done = eachRow(rows, r => {
       t.rows++;
       const id = val(r[R.id]);
-      if (!id) { rep.issues.badShops++; continue; }
-      if (sid.has(id)) { rep.issues.duplicateShops++; continue; }
+      if (!id) { rep.issues.badShops++; return; }
+      if (sid.has(id)) { rep.issues.duplicateShops++; return; }
       let la = null, ln = null;
       if (R.lat && R.lng) {
         la = parseFloat(lat(g(r, 'lat')));
@@ -349,19 +359,19 @@ function createBuilder({ schema = {} } = {}) {
         hasProducts: false
       };
       shops.push(shop); shopById.set(id, shop);
-    }
-    return t.rows;
+    });
+    return done ? done.then(() => t.rows) : t.rows;
   }
 
   function addProducts(rows, columns) {
     const R = cols('products', columns);
     const t = rep.tables.products;
-    for (const r of rows) {
+    const done = eachRow(rows, r => {
       t.rows++;
       const id = val(r[R.id]);
       if (!id || pid.has(id) || !(val(r[R.title_fa]) || val(r[R.model]))) {
         if (id && pid.has(id)) rep.issues.duplicateProducts++; else rep.issues.badProducts++;
-        continue;
+        return;
       }
       pid.add(id);
       const j = json(R.specs ? r[R.specs] : null);
@@ -387,24 +397,24 @@ function createBuilder({ schema = {} } = {}) {
       for (const k of kv.keys()) { const ck = p.cat + '\u0000' + k; keyCount.set(ck, (keyCount.get(ck) || 0) + 1); }
       products.push(p);
       if (kv.size) kvList.push([p, kv]);
-    }
-    return t.rows;
+    });
+    return done ? done.then(() => t.rows) : t.rows;
   }
 
   function addOffers(rows, columns) {
     const R = cols('offers', columns);
     const t = rep.tables.offers;
-    for (const r of rows) {
+    const done = eachRow(rows, r => {
       t.rows++;
       const rawPrice = R.price ? r[R.price] : null;
       const pr = val(R.product ? r[R.product] : null), sh = val(R.shop ? r[R.shop] : null);
-      if (rawPrice == null || String(rawPrice).trim() === '') { rep.issues.missingPrice++; rep.issues.badOffers++; continue; }
+      if (rawPrice == null || String(rawPrice).trim() === '') { rep.issues.missingPrice++; rep.issues.badOffers++; return; }
       const price = Number(lat(rawPrice).replace(/[,٬\s]/g, ''));
-      if (!Number.isFinite(price)) { rep.issues.badPrice++; rep.issues.badOffers++; continue; }
-      if (price <= 0) { rep.issues.nonpositivePrice++; rep.issues.badOffers++; continue; }
+      if (!Number.isFinite(price)) { rep.issues.badPrice++; rep.issues.badOffers++; return; }
+      if (price <= 0) { rep.issues.nonpositivePrice++; rep.issues.badOffers++; return; }
       if (price > 1e11) rep.issues.priceOutlier++;
       if (price === 1 || (String(price).length >= 6 && new Set(String(price)).size === 1)) rep.issues.placeholderPrice++;
-      if (!pid.has(pr) || !sid.has(sh)) { rep.issues.orphanOffers++; rep.issues.badOffers++; continue; }
+      if (!pid.has(pr) || !sid.has(sh)) { rep.issues.orphanOffers++; rep.issues.badOffers++; return; }
       const w = warrantyOf(R.warranty ? r[R.warranty] : null);
       const up = R.updated ? val(r[R.updated]) : null;
       const ts = up ? Date.parse(lat(up)) : NaN;
@@ -415,8 +425,8 @@ function createBuilder({ schema = {} } = {}) {
         warranty: w ? w.text : null, seller: R.seller ? val(r[R.seller]) : null,
         description: R.description ? val(r[R.description]) : null
       });
-    }
-    return t.rows;
+    });
+    return done ? done.then(() => t.rows) : t.rows;
   }
 
   function finish() {
@@ -539,7 +549,7 @@ function fromRaw(raw, dir) {
   return build(raw, { schema: m.schema });
 }
 
-module.exports = {
+module.exports = { eachRow,
   parseCSV, csvRows, build, loadDir, fromRaw, readTable, loadMapping, resolveCols, validateSchema,
   placeOf, urlOf, hoursOf, contactsOf, paymentsOf, warrantyOf, imagesOf, categoriesOf, createBuilder, flat
 };
