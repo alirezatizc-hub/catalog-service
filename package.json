@@ -2,7 +2,7 @@
   "name": "torob-assistant",
   "version": "3.1.0",
   "private": true,
-  "type": "module",
+  "type": "commonjs",
   "scripts": {
     "start": "node server.js",
     "test": "node --test test/*.test.js",
