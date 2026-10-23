@@ -124,7 +124,7 @@ async function start() {
   clearTimeout(waitT);
   try { meta = meta || await api('/api/meta'); } catch { return fail(start, 'اتصال به سرور برقرار نشد.'); }
   renderSource();
-  if (!meta.ready) return waitingDataset();
+  if (!meta.ready) return meta.loading === false ? notReady() : waitingDataset();
   if (!meta.dataOk || !meta.counts.products || !Object.keys(meta.cats).length) {
     return bot('دیتاست بارگذاری شد اما داده‌ی معتبری برای نمایش نیست. <a href="/api/status" target="_blank" rel="noopener">گزارش اتصال و نگاشت ستون‌ها</a> را ببینید.');
   }
@@ -160,12 +160,23 @@ function renderSource() {
     (meta.ready ? ` <span class="hint">${fa(c.products)} محصول · ${fa(c.shops)} فروشگاه · ${fa(c.offers)} آفِر ثبت‌شده</span>` : ' <span class="hint">در حال خواندن داده از دیتابیس…</span>') +
     (meta.db === 'postgres' ? ' <span class="tag info">پیگیری‌ها در دیتابیس ذخیره می‌شوند</span>' : meta.ready ? ' <span class="tag warn">پیگیری‌ها موقت‌اند (بدون دیتابیس)</span>' : '');
 }
+function notReady() {
+  const st2 = meta.dataset || {};
+  const why = st2.error || meta.error || '';
+  const d = say(`<b>دیتاست در دسترس نیست.</b><br><span class="hint">سرور بالا آمده ولی داده‌ی واقعی (PostgreSQL لیارا) خوانده نشد${why ? ' — <code>' + esc(why) + '</code>' : ''}. عمداً هیچ داده‌ی نمونه‌ای نشان نمی‌دهم.</span>
+   <div class="ch-row" style="margin-top:8px"><a class="btn sm ghost" href="/api/status" target="_blank" rel="noopener">گزارش اتصال و نگاشت ستون‌ها</a><button type="button" class="btn sm" id="nr-retry">تلاش دوباره</button></div>`);
+  const b = d.querySelector('#nr-retry'); if (b) b.onclick = () => { meta = null; start(); };
+}
 function waitingDataset() {
   const d = say('<b>دیتاست ترب در حال بارگذاری است…</b><br><span class="hint">محصولات، آفِرها و فروشگاه‌ها از PostgreSQL خوانده و ایندکس می‌شوند. این صفحه خودش به‌روز می‌شود.</span><div class="dots" role="status" aria-label="در حال بارگذاری"><span></span><span></span><span></span></div>');
   let n = 0;
   const tick = async () => {
     n++;
-    try { const m = await api('/api/meta'); if (m.ready) { d.remove(); return start(); } } catch { /* هنوز آماده نیست */ }
+    try {
+      const m = await api('/api/meta');
+      if (m.ready) { d.remove(); meta = m; return start(); }
+      if (m.loading === false) { d.remove(); meta = m; return notReady(); }
+    } catch { /* هنوز آماده نیست */ }
     if (n < 60) waitT = setTimeout(tick, 2500);
     else d.querySelector('.bub').innerHTML = 'بارگذاری بیشتر از حد معمول طول کشید. <a href="/api/status" target="_blank" rel="noopener">وضعیت اتصال و جدول‌ها</a> را ببینید، سپس دوباره تلاش کنید.';
   };

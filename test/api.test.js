@@ -109,3 +109,21 @@ t.test('فایل‌های استاتیک: نقشه‌ی محلی و صفحه‌�
   a.match(await home.text(), /خرید حضوری/);
   a.equal((await fetch(base + '/..%2fserver.js')).status, 403);
 });
+
+t.test('بدون دیتاست: اپ بالا می‌ماند و صادقانه ready=false می‌گوید (بدون داده‌ی ساختگی)', async () => {
+  const s2 = createServer(null, { loading: true });
+  await new Promise(r => s2.listen(0, '127.0.0.1', r));
+  const b2 = 'http://127.0.0.1:' + s2.address().port;
+  try {
+    s2.state.loading = false; // مثل وقتی که تلاش برای خواندن دیتابیس شکست خورده است
+    const [c, m] = await (await fetch(b2 + '/api/meta')).json().then(x => [200, x]);
+    a.equal(c, 200); a.equal(m.ready, false); a.equal(m.loading, false); a.equal(m.source, 'none');
+    a.deepEqual(m.counts, { products: 0, shops: 0, offers: 0 });
+    a.equal((await fetch(b2 + '/api/health')).status, 200);
+    const nr = await fetch(b2 + '/api/advice?pid=p1');
+    a.equal(nr.status, 503); a.match((await nr.json()).error, /^(not_ready|loading_dataset)$/);
+    const home = await fetch(b2 + '/');
+    a.equal(home.status, 200);
+    a.ok(!/داده‌ی نمونه|حالت نمایشی/.test(await home.text()));
+  } finally { s2.close(); }
+});

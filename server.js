@@ -122,7 +122,7 @@ function createServer(initialData, opts = {}) {
   function meta() {
     const m = geo.mapConfig(), cats = catsOf();
     return {
-      ready: state.ready, source: state.source, cats,
+      ready: state.ready, loading: !!state.loading, source: state.source, cats,
       catCount: Object.keys(cats).length,
       counts: state.data ? { products: state.ix.P.size, shops: state.ix.S.size, offers: state.data.offers.length } : { products: 0, shops: 0, offers: 0 },
       statuses: STATUSES, topics: TOPICS, channels: CHANNELS,
