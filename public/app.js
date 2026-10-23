@@ -22,11 +22,11 @@ const AV_FA = { in_stock: 'موجود', out_of_stock: 'ناموجود', unknown:
 const TOPIC_FA = { availability: 'موجودی', price: 'قیمت فعلی', hours: 'ساعت کاری', installment: 'اقساط', terms: 'شرایط خرید' };
 const TOPIC_Q = { availability: 'آیا همین الان موجود است؟', price: 'آیا قیمت فعلی همین است؟', hours: 'امروز تا چه ساعتی باز هستید؟', installment: 'آیا امکان خرید اقساطی دارید؟' };
 const HS = { open: ['باز', 'ok'], closed: ['بسته', 'no'], unknown: ['ساعت کاری نامشخص', 'wn'] };
-const SORT_FA = { price: 'ارزان‌ترین', dist: 'نزدیک‌ترین', smart: 'بهترین ترکیب' };
+const SORT_FA = { price: 'ارزان‌ترین', dist: 'نزدیک‌ترین', smart: 'بهترین ترکیب', closing: 'دیرتر بسته می‌شود' };
 const PRESETS = [['مرکز تهران (پیش‌فرض)', 35.72, 51.41], ['میدان انقلاب', 35.7011, 51.3912], ['میدان ونک', 35.7575, 51.411], ['بازار تهران', 35.6738, 51.42], ['میدان صادقیه', 35.7156, 51.3436], ['میدان تجریش', 35.8040, 51.4300]];
-const TOGGLES = [['inst', 'اقساطی (اعلام‌شده)'], ['open', 'فقط بازها'], ['tp', 'ترب‌پی'], ['kb', 'کالابرگ'], ['ex', 'ارسال فوری']];
+const TOGGLES = [['inst', 'اقساطی (اعلام‌شده)'], ['credit', 'اقساط حضوری'], ['open', 'فقط بازها'], ['tp', 'ترب‌پی'], ['ex', 'ارسال فوری']];
 
-let meta, st, box, mv = null, cmp = new Set(), rowsCache = [], inq = {}, lastFocus = null, routeTok = 0;
+let meta, st, box, mv = null, cmp = new Set(), rowsCache = [], inq = {}, lastFocus = null, routeTok = 0, advData = null, advSeq = 0, advTimer = null, waitT = null;
 const routeCache = new Map();
 
 async function api(p, params, opt, timeout = 12000) {
@@ -85,7 +85,7 @@ function fail(retry, msg) {
 
 /* ───────── وضعیت و ناوبری مراحل ───────── */
 function newState(keep) {
-  return { cat: null, sel: {}, skip: new Set(), auto: new Set(), order: [], loc: keep ? keep.loc : { lat: PRESETS[0][1], lng: PRESETS[0][2] }, locSrc: keep ? keep.locSrc : 'default', f: { inst: 0, open: 0, tp: 0, kb: 0, ex: 0 }, sort: 'price', rad: 20, min: '', max: '', pid: null, aid: null, product: null, view: 'list', seq: 0, fitNext: true, pick: false };
+  return { cat: null, sel: {}, skip: new Set(), auto: new Set(), order: [], loc: keep ? keep.loc : { lat: PRESETS[0][1], lng: PRESETS[0][2] }, locSrc: keep ? keep.locSrc : 'default', f: { inst: 0, credit: 0, open: 0, tp: 0, kb: 0, ex: 0 }, sort: 'price', rad: 20, min: '', max: '', pid: null, aid: null, product: null, view: 'list', seq: 0, fitNext: true, pick: false };
 }
 function destroyPanel() { if (mv) { try { mv.destroy(); } catch { /* ignore */ } mv = null; } if (box) { box.remove(); box = null; } }
 function invalidate() { destroyPanel(); if (st) { st.pid = null; st.aid = null; } cmp.clear(); routeTok++; }
@@ -120,15 +120,19 @@ function back() {
 /* ───────── شروع ───────── */
 async function start() {
   const keep = st && { loc: st.loc, locSrc: st.locSrc };
-  destroyPanel(); chat.innerHTML = ''; $('#crumbs').innerHTML = ''; cmp.clear(); inq = {}; st = newState(keep);
+  destroyPanel(); chat.innerHTML = ''; $('#crumbs').innerHTML = ''; cmp.clear(); inq = {}; st = newState(keep); advData = null;
+  clearTimeout(waitT);
   try { meta = meta || await api('/api/meta'); } catch { return fail(start, 'اتصال به سرور برقرار نشد.'); }
-  $('#demo').hidden = !meta.demo;
+  renderSource();
+  if (!meta.ready) return meta.loading === false ? notReady() : waitingDataset();
+  if (!meta.dataOk || !meta.counts.products || !Object.keys(meta.cats).length) {
+    return bot('دیتاست بارگذاری شد اما داده‌ی معتبری برای نمایش نیست. <a href="/api/status" target="_blank" rel="noopener">گزارش اتصال و نگاشت ستون‌ها</a> را ببینید.');
+  }
   refreshBadge();
-  if (!meta.dataOk || !meta.counts.products || !Object.keys(meta.cats).length) return bot('داده‌ای برای نمایش بارگذاری نشده است. پس از اتصال دیتاست دوباره تلاش کنید.');
   const hero = document.createElement('section'); hero.className = 'hero';
   hero.innerHTML = `<h1>چی لازم داری؟ نزدیک‌ترین و به‌صرفه‌ترین فروشگاه تهران رو پیدا می‌کنم</h1>
    <p>قیمت‌ها از فروشنده‌ها ثبت شده؛ موجودی تا وقتی از فروشنده نپرسی «تأییدنشده» است.</p>
-   <ol class="steps"><li><b>محصول را مشخص کن</b>با چند سؤال کوتاه یا یک جمله</li><li><b>فروشگاه‌های نزدیک</b>روی نقشه و بر اساس موقعیتت</li><li><b>مقایسه کن</b>قیمت، فاصله و ساعت کاری</li><li><b>از فروشنده بپرس</b>اگر نبود، جایگزین پیشنهاد می‌شود</li></ol>`;
+   <ol class="steps"><li><b>محصول را مشخص کن</b>با چند سؤال کوتاه یا یک جمله</li><li><b>فروشگاه‌های نزدیک</b>روی نقشه و بر اساس موقعیتت</li><li><b>مقایسه کن</b>قیمت، فاصله و ساعت کاری</li><li><b>پرسش و تماس</b>اگر نبود، جایگزین یا پاساژ نزدیک پیشنهاد می‌شود</li></ol>`;
   chat.append(hero);
   const cats = document.createElement('div'); cats.className = 'cats'; cats.setAttribute('role', 'group'); cats.setAttribute('aria-label', 'دسته‌بندی محصول');
   Object.entries(meta.cats).forEach(([k, v]) => {
@@ -138,12 +142,45 @@ async function start() {
   chat.append(cats);
   const ex = document.createElement('div'); ex.className = 'examples'; chat.append(ex);
   try { // نمونه جمله‌ها از برندهای واقعی داده
-    for (const [k, v] of Object.entries(meta.cats).slice(0, 3)) {
+    for (const [k, v] of Object.entries(meta.cats).slice(0, 4)) {
       if (!v.steps.some(s => s[0] === 'brand')) continue;
       const r = await api('/api/options', { cat: k, key: 'brand' }); const br = r.options[0] && r.options[0].v; if (!br) continue;
       const t = PD(v.name) + ' ' + PD(br), b = document.createElement('button'); b.type = 'button'; b.className = 'chip'; b.textContent = '«' + t + '»'; b.onclick = () => { hero.remove(); cats.remove(); ex.remove(); txt(t); }; ex.append(b);
     }
   } catch { /* نمونه‌ها اختیاری‌اند */ }
+}
+
+// منبع داده و آمادگی سرور: هیچ داده‌ی نمونه‌ای به‌جای دیتاست واقعی نمایش داده نمی‌شود.
+function renderSource() {
+  const el = $('#src'); if (!el || !meta) return;
+  const c = meta.counts || {};
+  const src = meta.source === 'postgres' ? 'دیتاست ترب · PostgreSQL' : meta.source === 'files' ? 'دیتاست ترب · فایل محلی' : 'دیتاست وصل نشده';
+  el.hidden = false;
+  el.innerHTML = `<span class="tag ${meta.ready ? 'ok' : 'bad'}">${esc(src)}</span>` +
+    (meta.ready ? ` <span class="hint">${fa(c.products)} محصول · ${fa(c.shops)} فروشگاه · ${fa(c.offers)} آفِر ثبت‌شده</span>` : ' <span class="hint">در حال خواندن داده از دیتابیس…</span>') +
+    (meta.db === 'postgres' ? ' <span class="tag info">پیگیری‌ها در دیتابیس ذخیره می‌شوند</span>' : meta.ready ? ' <span class="tag warn">پیگیری‌ها موقت‌اند (بدون دیتابیس)</span>' : '');
+}
+function notReady() {
+  const st2 = meta.dataset || {};
+  const why = st2.error || meta.error || '';
+  const d = say(`<b>دیتاست در دسترس نیست.</b><br><span class="hint">سرور بالا آمده ولی داده‌ی واقعی (PostgreSQL لیارا) خوانده نشد${why ? ' — <code>' + esc(why) + '</code>' : ''}. عمداً هیچ داده‌ی نمونه‌ای نشان نمی‌دهم.</span>
+   <div class="ch-row" style="margin-top:8px"><a class="btn sm ghost" href="/api/status" target="_blank" rel="noopener">گزارش اتصال و نگاشت ستون‌ها</a><button type="button" class="btn sm" id="nr-retry">تلاش دوباره</button></div>`);
+  const b = d.querySelector('#nr-retry'); if (b) b.onclick = () => { meta = null; start(); };
+}
+function waitingDataset() {
+  const d = say('<b>دیتاست ترب در حال بارگذاری است…</b><br><span class="hint">محصولات، آفِرها و فروشگاه‌ها از PostgreSQL خوانده و ایندکس می‌شوند. این صفحه خودش به‌روز می‌شود.</span><div class="dots" role="status" aria-label="در حال بارگذاری"><span></span><span></span><span></span></div>');
+  let n = 0;
+  const tick = async () => {
+    n++;
+    try {
+      const m = await api('/api/meta');
+      if (m.ready) { d.remove(); meta = m; return start(); }
+      if (m.loading === false) { d.remove(); meta = m; return notReady(); }
+    } catch { /* هنوز آماده نیست */ }
+    if (n < 60) waitT = setTimeout(tick, 2500);
+    else d.querySelector('.bub').innerHTML = 'بارگذاری بیشتر از حد معمول طول کشید. <a href="/api/status" target="_blank" rel="noopener">وضعیت اتصال و جدول‌ها</a> را ببینید، سپس دوباره تلاش کنید.';
+  };
+  waitT = setTimeout(tick, 2500);
 }
 
 /* ───────── سؤال‌ها و انتخاب محصول ───────── */
@@ -214,11 +251,20 @@ function ago(iso) { const m = (Date.now() - Date.parse(iso)) / 6e4; if (!(m >= 0
 const tri = (v, y, n) => v === true ? y : v === false ? n : null;
 function info(r, i) {
   const s = r.shop, o = r.offer, h = HS[r.hours.state], [a, ac] = ageOf(o.updated), pl = s.place;
+  const closeIn = r.hours.state === 'open' && r.hours.closeInMin != null ? r.hours.closeInMin : null;
+  const hTxt = r.hours.state === 'open'
+    ? 'باز' + (closeIn != null ? ' · ' + fa(Math.floor(closeIn / 60)) + ':' + PD(String(Math.round(closeIn % 60)).padStart(2, '0')) + ' وقت داری' : (r.hours.close != null ? ' تا ' + hm(r.hours.close) : ''))
+    : r.hours.state === 'closed'
+      ? 'بسته' + (r.hours.next ? ' · ' + PD(r.hours.next.at) + ' باز می‌شود' : (r.hours.note ? ' · ' + r.hours.note : ''))
+      : 'ساعت کاری نامشخص';
   return {
-    i, id: s.id, name: PD(s.name), demo: !!s.demo, addr: PD(s.mall || ''), place: pl ? [pl.mall, pl.floor, pl.unit].filter(Boolean).map(PD) : [], price: o.price, unit: o.unit || 'تومان', km: r.km,
-    kmTxt: r.km == null ? 'فاصله نامشخص' : fa1(r.km) + ' کیلومتر (خط مستقیم)', hs: r.hours.state, hoursTxt: h[0] + (r.hours.open != null ? ' · ' + hm(r.hours.open) + ' تا ' + hm(r.hours.close) : r.hours.note ? ' · ' + r.hours.note : ''), hc: h[1],
+    i, id: s.id, name: PD(s.name), addr: s.addr || s.mall || '', place: pl ? [pl.mall, pl.floor, pl.unit].filter(Boolean).map(PD) : [], price: o.price, unit: o.unit || 'تومان', km: r.km,
+    etaMin: r.etaMin != null ? r.etaMin : (r.km != null ? Math.max(3, Math.round(r.km * 1.35 / 18 * 60 + 6)) : null),
+    kmTxt: r.km == null ? 'فاصله نامشخص' : fa1(r.km) + ' کیلومتر (خط مستقیم)',
+    hs: r.hours.state, hoursTxt: hTxt, hc: h[1], closeIn,
     ageTxt: 'قیمت ثبت‌شده ' + a, ac, avail: 'موجودی تأییدنشده', warranty: o.warranty ? PD(o.warranty) : 'گارانتی: ثبت نشده', seller: o.seller ? PD(o.seller) : '', desc: o.description ? PD(o.description) : '', score: r.score,
-    inst: s.installment, tp: s.torobpay, kb: s.kalabarg, ex: s.express, hasLoc: s.lat != null && s.lng != null, lat: s.lat, lng: s.lng, tel: s.tel, wa: s.wa, ig: s.ig, web: s.web, src: s.demo ? 'داده نمونه' : 'دیتاست ترب'
+    inst: s.installment, credit: r.credit === true, tp: s.torobpay, kb: s.kalabarg, ex: s.express, hasLoc: s.lat != null && s.lng != null, lat: s.lat, lng: s.lng,
+    tel: s.tel, wa: s.wa, bale: s.bale, ig: s.ig, web: s.web, cats: s.cats || [], providers: s.providers || [], pay: s.pay || [], src: 'دیتاست ترب'
   };
 }
 const instTxt = x => x.inst === true ? 'اعلام‌شده توسط فروشنده' : x.inst === false ? 'ندارد' : 'نامشخص';
@@ -253,6 +299,7 @@ function buildPanel(p) {
     </div></details>
   </div>
   <div class="summary" id="r-sum"></div>
+  <div class="advice" id="r-adv" hidden aria-live="polite"></div>
   <div class="tabs"><div class="seg" role="group" aria-label="نمای نتایج"><button type="button" data-v="list" aria-pressed="true">${icon('list')} فهرست</button><button type="button" data-v="map" aria-pressed="false">${icon('map')} نقشه</button></div></div>
   <div class="split" id="r-split">
    <div class="pane-list"><div class="shops" id="r-list" aria-live="polite"></div></div>
@@ -263,13 +310,13 @@ function buildPanel(p) {
     <div class="map-note" id="r-mapnote"></div>
    </div>
   </div>
-  <div class="cmp-bar" id="r-cmp" hidden><span id="r-cmp-t"></span><button type="button" class="btn sm" id="b-cmp">مقایسه</button></div>`;
+  <div class="cmp-bar" id="r-cmp" hidden><span id="r-cmp-t"></span><button type="button" class="btn sm" id="b-cmp">مقایسه</button><button type="button" class="btn sm ghost" id="b-trip">${icon('route')} برنامه‌ی مراجعه</button></div>`;
   chat.append(box);
   wirePanel(); syncControls();
   // نقشه
   const cfg = meta.map;
   if (window.TorobMap && cfg && cfg.tiles) {
-    mv = TorobMap.create($('#r-map'), cfg, {
+    mv = window.TorobMap.create($('#r-map'), cfg, {
       onSelect: id => select(id, { fromMap: true }),
       onMove: loc => { st.loc = loc; st.locSrc = 'manual'; st.fitNext = false; syncControls(); refresh(); },
       onPick: loc => { st.loc = loc; st.locSrc = 'manual'; setPick(false); st.fitNext = false; syncControls(); refresh(); },
@@ -300,13 +347,13 @@ function wirePanel() {
   const rd = $('#rd'); rd.oninput = e => { $('#rv').textContent = fa(e.target.value) + ' کیلومتر'; }; rd.onchange = e => { st.rad = +e.target.value; st.fitNext = true; syncControls(); refresh(); };
   $('#pl').onchange = e => { const v = e.target.value; if (v === 'gps' || v === 'manual') return; const x = PRESETS[+v]; st.loc = { lat: x[1], lng: x[2] }; st.locSrc = 'preset'; st.fitNext = true; syncControls(); refresh(); };
   $('#b-gps').onclick = geo; $('#b-pick').onclick = () => { setView('map'); setPick(!st.pick); };
-  $('#b-cmp').onclick = openCompare;
+  $('#b-cmp').onclick = openCompare; $('#b-trip').onclick = openTrip;
   const list = $('#r-list');
   list.onclick = e => {
     const a = e.target.closest('[data-act]'), card = e.target.closest('.shop'); if (!card) return;
     if (e.target.closest('a')) return e.stopPropagation();
     const id = card.dataset.id;
-    if (a) { e.stopPropagation(); const k = a.dataset.act; if (k === 'ask') return openAsk(id); if (k === 'map') { select(id); setView('map'); return; } if (k === 'sel') return select(a.dataset.id); }
+    if (a) { e.stopPropagation(); const k = a.dataset.act; if (k === 'ask') return openAsk(id); if (k === 'map') { select(id); setView('map'); return; } if (k === 'watch') return openWatch(id); if (k === 'sel') return select(a.dataset.id); }
     select(id);
   };
   list.onkeydown = e => { const card = e.target.closest('.shop'); if (card && e.target === card && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); select(card.dataset.id); } };
@@ -322,7 +369,7 @@ async function refresh() {
   const mn = st.min === '' ? null : +st.min, mx = st.max === '' ? null : +st.max, badB = mn != null && mx != null && mn > mx;
   $('#r-bud-err').textContent = badB ? 'بازه‌ی بودجه نامعتبر است؛ اعمال نشد.' : '';
   let d;
-  try { d = await api('/api/offers', { pid, lat: st.loc.lat, lng: st.loc.lng, rad: st.rad, inst: st.f.inst ? 1 : 0, open: st.f.open ? 1 : 0, tp: st.f.tp ? 1 : 0, kb: st.f.kb ? 1 : 0, ex: st.f.ex ? 1 : 0, sort: st.sort, min: badB ? '' : st.min, max: badB ? '' : st.max }); }
+  try { d = await api('/api/offers', { pid, lat: st.loc.lat, lng: st.loc.lng, rad: st.rad, inst: st.f.inst ? 1 : 0, credit: st.f.credit ? 1 : 0, open: st.f.open ? 1 : 0, tp: st.f.tp ? 1 : 0, kb: st.f.kb ? 1 : 0, ex: st.f.ex ? 1 : 0, sort: st.sort, min: badB ? '' : st.min, max: badB ? '' : st.max }); }
   catch { if (pid !== st.pid || my !== st.seq) return; box.classList.remove('loading'); box.setAttribute('aria-busy', 'false'); list.innerHTML = ''; return fail(refresh); }
   if (pid !== st.pid || my !== st.seq || !box) return;
   box.classList.remove('loading'); box.removeAttribute('aria-busy');
@@ -330,7 +377,7 @@ async function refresh() {
   const X = rowsCache.map(info);
   if (!X.find(x => x.id === st.aid)) st.aid = X[0] && X[0].id || null;
   for (const id of [...cmp]) if (!X.find(x => x.id === id)) cmp.delete(id);
-  renderHead(d, X); renderList(X, d); renderMap(X); cmpBar(); updateRoute();
+  renderHead(d, X); renderList(X, d); renderMap(X); cmpBar(); updateRoute(); loadAdvice();
 }
 function renderHead(d, X) {
   const rg = d.range, sub = $('#r-sub');
@@ -358,16 +405,227 @@ function renderHead(d, X) {
     ins.hidden = false; ins.querySelectorAll('[data-pk]').forEach(b => b.onclick = () => { select(b.dataset.pk); if (st.view === 'list') $('#r-list .shop.sel')?.scrollIntoView({ block: 'center', behavior: reduce ? 'auto' : 'smooth' }); });
   }
   const f = Object.values(st.f).some(Boolean) || st.min !== '' || st.max !== '';
-  $('#r-sum').innerHTML = `<span><b>${fa(X.length)}</b> فروشگاه · ${SORT_FA[st.sort]}</span>${f ? '<button type="button" class="btn ghost sm" id="b-clr">پاک کردن فیلترها</button>' : ''}`;
-  const clr = $('#b-clr'); if (clr) clr.onclick = () => { st.f = { inst: 0, open: 0, tp: 0, kb: 0, ex: 0 }; st.min = ''; st.max = ''; st.fitNext = true; syncControls(); refresh(); };
+  $('#r-sum').innerHTML = `<span><b>${fa(X.length)}</b> فروشگاه · ${SORT_FA[st.sort]}</span><span class="ch-row"><button type="button" class="btn ghost sm" id="b-hubs">${icon('store')} پاساژهای نزدیک</button>${f ? '<button type="button" class="btn ghost sm" id="b-clr">پاک کردن فیلترها</button>' : ''}</span>`;
+  $('#b-hubs').onclick = openHubs;
+  const clr = $('#b-clr'); if (clr) clr.onclick = () => { st.f = { inst: 0, credit: 0, open: 0, tp: 0, kb: 0, ex: 0 }; st.min = ''; st.max = ''; st.fitNext = true; syncControls(); refresh(); };
 }
+
+/* ───────── تصمیم‌یار «الان کجا بروم؟» ───────── */
+const mapDir = (lat, lng) => `https://www.google.com/maps/dir/?api=1${st && st.loc ? '&origin=' + st.loc.lat + ',' + st.loc.lng : ''}&destination=${lat},${lng}`;
+const hoursShort = a => {
+  const h = a.hours;
+  if (h.state === 'open') return h.closeInMin != null ? 'باز · ' + fa(Math.round(h.closeInMin / 60 * 10) / 10) + ' ساعت وقت' : 'باز';
+  if (h.state === 'closed') return h.next ? 'بسته · ' + PD(h.next.at) + ' باز می‌شود' : 'بسته';
+  return 'ساعت نامشخص';
+};
+async function loadAdvice() {
+  if (!box || !st.pid) return;
+  const pid = st.pid, my = ++advSeq, el = $('#r-adv');
+  if (!el) return;
+  el.hidden = false;
+  if (!el.firstChild) el.innerHTML = '<div class="sk sk-row"></div><div class="sk sk-row"></div>';
+  clearTimeout(advTimer);
+  advTimer = setTimeout(async () => {
+    let d;
+    try { d = await api('/api/advice', { pid, lat: st.loc.lat, lng: st.loc.lng, rad: Math.min(Math.max(st.rad, 1), 20), max: 30 }); }
+    catch { if (my === advSeq) el.hidden = true; return; }
+    if (my !== advSeq || !box || st.pid !== pid) return;
+    advData = d; renderAdvice(d);
+  }, 120);
+}
+function renderAdvice(d) {
+  const el = $('#r-adv'); if (!el) return;
+  const V = d.verdict, lvl = { go: 'ok', far: 'warn', closed: 'bad', none: 'bad' }[V.level] || '';
+  const hub = d.hubs && d.hubs[0];
+  el.innerHTML = `
+   <div class="adv-h"><span class="tag ${lvl}">${V.level === 'go' ? 'همین حالا برو' : V.level === 'far' ? 'دورتر ولی باز' : V.level === 'closed' ? 'همه بسته‌اند' : 'چیزی ثبت نشده'}</span><h3>${esc(V.title)}</h3></div>
+   <p class="adv-t">${esc(V.text)}</p>
+   <div class="ch-row adv-acts">
+     ${V.shop ? `<button type="button" class="btn sm" data-a="go">${icon('route')} مسیر و تماس</button>` : ''}
+     ${hub ? `<button type="button" class="btn sm ghost" data-a="hub">${icon('pin')} ${esc(PD(hub.name))} · ${fa1(hub.km)} کیلومتر</button>` : ''}
+     <button type="button" class="btn sm ghost" data-a="watch">${icon('bell')} زیر نظر بگیر</button>
+     <button type="button" class="btn sm ghost" data-a="map">${icon('map')} نقشه</button>
+   </div>
+   ${d.openNow.length ? `<div class="adv-g"><b class="adv-lbl">باز و آماده‌ی مراجعه</b><div class="adv-grid">${d.openNow.slice(0, 3).map(a => advCard(a)).join('')}</div></div>` : ''}
+   ${d.farther.length ? `<div class="adv-g"><b class="adv-lbl">دورتر، ولی همین حالا باز</b><div class="adv-grid">${d.farther.slice(0, 2).map(a => advCard(a)).join('')}</div></div>` : ''}
+   ${d.closedNearby.length ? `<div class="adv-g"><b class="adv-lbl">در محدوده‌ات هست، ولی الان بسته است</b><div class="adv-chips">${d.closedNearby.slice(0, 4).map(a => `<button type="button" class="chip" data-shop="${esc(a.shop.id)}">${esc(PD(a.shop.name))} · ${PD(hoursShort(a))}</button>`).join('')}</div></div>` : ''}
+   ${d.maybeShops && d.maybeShops.length ? `<div class="adv-g"><b class="adv-lbl">در ترب ثبت نکرده‌اند، ولی هم‌دسته‌اند</b><div class="adv-chips">${d.maybeShops.map(a => `<button type="button" class="chip" data-maybe="${esc(a.shop.id)}">${esc(PD(a.shop.name))} · ${fa1(a.km)} کیلومتر</button>`).join('')}</div><div class="hint">این‌ها بر اساس «دسته‌ی فعالیت» فروشگاه انتخاب شده‌اند، نه آفِر ثبت‌شده؛ ممکن است این محصول را نداشته باشند. برای همین «ممکن است» و نه «موجود».</div></div>` : ''}
+   <details class="why"><summary>چه چیزی تأیید نشده است؟</summary><ul class="warns">${d.honesty.map(x => `<li>${esc(x)}</li>`).join('')}</ul></details>`;
+  el.querySelectorAll('[data-shop]').forEach(b => b.onclick = () => {
+    const id = b.dataset.shop;
+    if (rowsCache.some(r => r.shop.id === id)) { select(id); setView('list'); box.querySelector(`.shop[data-id="${CSS.escape(id)}"]`)?.scrollIntoView({ block: 'center', behavior: reduce ? 'auto' : 'smooth' }); }
+    else toast('این فروشگاه آفِر ثبت‌شده‌ای برای این محصول ندارد.');
+  });
+  el.querySelectorAll('[data-maybe]').forEach(b => b.onclick = () => openMaybe(b.dataset.maybe));
+  const on = (sel, fn) => { const n = el.querySelector(sel); if (n) n.onclick = fn; };
+  on('[data-a=go]', () => openGo(V.shop));
+  on('[data-a=watch]', () => openWatch());
+  on('[data-a=hub]', () => showHubs(d.hubs));
+  on('[data-a=map]', () => { setView('map'); if (mv) mv.fit([[st.loc.lat, st.loc.lng], ...d.openNow.concat(d.farther).map(a => [a.shop.lat, a.shop.lng])]); });
+  el.querySelectorAll('[data-go]').forEach(b => b.onclick = () => openGo(b.dataset.go));
+  el.querySelectorAll('[data-ask2]').forEach(b => b.onclick = () => openAsk(b.dataset.ask2));
+}
+function advCard(a) {
+  const s = a.shop, o = a.offer, h = a.hours;
+  const cls = h.state === 'open' ? 'ok' : h.state === 'closed' ? 'bad' : 'wn';
+  return `<article class="advc">
+   <div class="advc-h"><b>${esc(PD(s.name))}</b><span class="tag ${cls}">${h.state === 'open' ? 'باز' : h.state === 'closed' ? 'بسته' : 'نامشخص'}</span></div>
+   <div class="advc-m">${esc(s.place ? [s.place.mall, s.place.floor, s.place.unit].filter(Boolean).map(PD).join(' · ') : (s.addr ? PD(s.addr) : 'آدرس ثبت نشده'))}</div>
+   <div class="advc-f"><span class="pr">${fa(o.price)} <small>تومان</small></span><span>${fa1(a.km)} کیلومتر</span><span>~${fa(a.etaMin)} دقیقه</span></div>
+   <div class="hint">${esc(a.hours.state === 'unknown' ? 'ساعت کاری نامشخص' : hoursShort(a))}</div>
+   <div class="ch-row"><button type="button" class="btn sm" data-go="${esc(s.id)}">${icon('route')} برو</button><button type="button" class="btn sm ghost" data-ask2="${esc(s.id)}">${icon('chat')} بپرس</button></div>
+  </article>`;
+}
+function openGo(id) {
+  const d = advData; if (!d) return;
+  const a = [...d.openNow, ...d.farther, ...d.closedNearby, ...d.unknownHours].find(x => x.shop.id === id);
+  if (!a) return;
+  const s = a.shop, o = a.offer;
+  const w = document.createElement('div'); w.style.display = 'grid'; w.style.gap = '12px';
+  w.innerHTML = `<div class="hint">${esc(PD(s.name))}${s.place && s.place.mall ? ' · ' + esc(PD(s.place.mall)) : ''}</div>
+   <div class="go-grid">
+     <div><b>${fa(o.price)} تومان</b><div class="hint">قیمت ثبت‌شده${o.updated ? ' · ' + ago(o.updated) : ''}</div></div>
+     <div><b>${fa1(a.km)} کیلومتر</b><div class="hint">~${fa(a.etaMin)} دقیقه با خودرو</div></div>
+     <div><b>${a.hours.state === 'open' ? 'باز' : a.hours.state === 'closed' ? 'بسته' : 'نامشخص'}</b><div class="hint">${esc(hoursShort(a))}</div></div>
+   </div>
+   ${s.place && (s.place.floor || s.place.unit) ? `<div class="hint">داخل پاساژ: ${esc([s.place.mall, s.place.floor, s.place.unit].filter(Boolean).map(PD).join(' · '))}</div>` : ''}
+   <div class="ch-row">
+     <a class="btn" target="_blank" rel="noopener noreferrer" href="${esc(mapDir(s.lat, s.lng))}">${icon('route')} مسیریابی</a>
+     ${s.tel ? `<a class="btn ghost" href="tel:${esc(String(s.tel).replace(/[^\d+]/g, ''))}">${icon('phone')} تماس</a>` : ''}
+     ${s.wa ? `<a class="btn ghost" target="_blank" rel="noopener noreferrer" href="${esc(waHref(s.wa, 'سلام، درباره‌ی «' + PD(st.product.title_fa || '') + '» می‌خواستم بپرسم موجود است؟'))}">واتساپ فروشگاه</a>` : ''}
+     <button type="button" class="btn ghost" id="go-call">${icon('call')} بگذار ما تماس بگیریم</button>
+     <button type="button" class="btn ghost" id="go-watch">${icon('bell')} زیر نظر بگیر</button>
+   </div>
+   <div class="hint">موجودی در دیتاست نیست؛ اگر همین حالا راه می‌افتی، بهتر است قبلش یک تماس/پیام کوتاه بگیری.</div>`;
+  w.querySelector('#go-call').onclick = () => openCall(id);
+  w.querySelector('#go-watch').onclick = () => openWatch(id);
+  openDlg('رفتن به فروشگاه', w);
+}
+function openMaybe(id) {
+  const d = advData; if (!d) return;
+  const x = (d.maybeShops || []).find(m => m.shop.id === id); if (!x) return;
+  const s = x.shop;
+  const w = document.createElement('div'); w.style.display = 'grid'; w.style.gap = '12px';
+  w.innerHTML = `<div class="hint">${esc(PD(s.name))} · ${fa1(x.km)} کیلومتر · ${x.hours.state === 'open' ? 'باز' : 'بسته/نامشخص'}</div>
+   <div class="hint">دسته‌های فعالیت: ${s.cats && s.cats.length ? esc(s.cats.map(PD).join('، ')) : 'ثبت نشده'}</div>
+   <div class="box-warn">این فروشگاه این محصول را در ترب ثبت نکرده است؛ «هم‌دسته بودن» یعنی ممکن است داشته باشد، نه اینکه دارد. برای همین قبل از رفتن بپرس.</div>
+   <div class="ch-row">
+     <a class="btn" target="_blank" rel="noopener noreferrer" href="${esc(mapDir(s.lat, s.lng))}">${icon('route')} مسیر</a>
+     ${s.tel ? `<a class="btn ghost" href="tel:${esc(String(s.tel).replace(/[^\d+]/g, ''))}">${icon('phone')} تماس</a>` : ''}
+     <button type="button" class="btn ghost" id="m-call">${icon('call')} بگذار ما بپرسیم</button>
+   </div>`;
+  w.querySelector('#m-call').onclick = () => openCall(id, 'availability', 'سلام، آیا «' + (st.product.title_fa || '') + '» را موجود دارید؟');
+  openDlg('فروشگاه هم‌دسته‌ی نزدیک', w);
+}
+
+/* ───────── هشدار قیمت ───────── */
+function openWatch(shopId) {
+  if (!st.pid) return;
+  const base = (advData && advData.cheapest && advData.cheapest.price) || (st.range && st.range.minPrice) || null;
+  const guess = base ? Math.round(base * 0.95 / 1000) * 1000 : '';
+  const w = document.createElement('div'); w.style.display = 'grid'; w.style.gap = '12px';
+  w.innerHTML = `<div class="hint">${shopId ? 'فقط همین فروشگاه' : 'همه‌ی فروشگاه‌های این محصول در محدوده'} را زیر نظر می‌گیریم. اگر قیمت پایین بیاید یا فروشگاهی باز شود، در «پیگیری‌ها» می‌بینی.</div>
+   <label class="fld"><span>سقف قیمت هدف (تومان) — اختیاری</span><input id="w-t" type="number" min="0" inputmode="numeric" value="${guess}" placeholder="مثلاً ${base || ''}"></label>
+   <label class="fld"><span>شعاع (کیلومتر)</span><input id="w-r" type="number" min="1" max="100" value="${Math.min(Math.max(st.rad, 1), 40)}"></label>
+   <div class="ch-row"><button type="button" class="btn" id="w-ok">${icon('bell')} ثبت هشدار</button></div>
+   <div class="hint">هشدار «موجودی» نمی‌دهیم؛ موجودی در دیتاست نیست و ادعای الکی نمی‌کنیم.</div>`;
+  w.querySelector('#w-ok').onclick = async () => {
+    const target = +w.querySelector('#w-t').value || null, rad = +w.querySelector('#w-r').value || null;
+    try {
+      await post('/api/watch', { client: CLIENT, product: st.pid, shop: shopId || null, target, rad, lat: st.loc.lat, lng: st.loc.lng });
+      toast('هشدار ثبت شد'); closeDlg(); refreshBadge(); openTracker('watch');
+    } catch { toast('ثبت هشدار ناموفق بود.'); }
+  };
+  openDlg('زیر نظر گرفتن قیمت و فروشگاه', w);
+}
+
+/* ───────── «بگذار ما تماس بگیریم» ───────── */
+function openCall(shopId, topic = 'availability', question = '') {
+  const row = rowsCache.find(y => y.shop.id === shopId);
+  const shop = row ? row.shop : (advData && [...advData.openNow, ...advData.farther, ...advData.closedNearby, ...(advData.maybeShops || [])].find(x => x.shop.id === shopId) || {}).shop;
+  const name = (shop && shop.name) || 'فروشگاه';
+  const w = document.createElement('div'); w.style.display = 'grid'; w.style.gap = '12px';
+  w.innerHTML = `<div class="hint">${esc(PD(name))}${shop && shop.tel ? ' · ' + esc(PD(shop.tel)) : ''}</div>
+   <label class="fld"><span>چه چیزی برایت بپرسیم؟</span><textarea id="c-q" maxlength="300">${esc(question || TOPIC_Q[topic] || TOPIC_Q.availability)}</textarea></label>
+   <label class="fld"><span>شماره‌ی تماس شما (اختیاری)</span><input id="c-p" inputmode="tel" maxlength="20" placeholder="۰۹۱۲…"></label>
+   <label class="row-chk"><input id="c-ok" type="checkbox"> <span>موافقم برای این پرسش با فروشگاه تماس گرفته شود؛ حداکثر یک‌بار در روز و فقط در ساعت کاری فروشگاه.</span></label>
+   <div class="hint">${meta.features && meta.features.callWebhook ? 'درخواست به سرویس تماس سپرده می‌شود و نتیجه‌اش اینجا ثبت خواهد شد.' : 'در این نسخه تماس خودکار نداریم؛ درخواست در صف پیگیری می‌ماند و پاسخی از طرف فروشگاه ساخته نمی‌شود.'}</div>
+   <div class="ch-row"><button type="button" class="btn" id="c-go">${icon('call')} ثبت درخواست تماس</button></div><div id="c-out"></div>`;
+  const out = w.querySelector('#c-out');
+  w.querySelector('#c-go').onclick = async () => {
+    const q = w.querySelector('#c-q').value.trim(), consent = w.querySelector('#c-ok').checked;
+    const phone = w.querySelector('#c-p').value.trim().replace(/[۰-۹]/g, d => '۰۱۲۳۴۵۶۷۸۹'.indexOf(d)).replace(/\s+/g, '');
+    if (!consent) { out.innerHTML = '<div class="box-warn">برای تماس، رضایت لازم است. اگر نمی‌خواهی، از دکمه‌های واتساپ/تماس خودت استفاده کن.</div>'; return; }
+    if (q.length < 8) { out.innerHTML = '<div class="box-warn">سؤال کوتاه است؛ کمی دقیق‌تر بنویس تا فروشگاه گیج نشود.</div>'; return; }
+    try {
+      const rec = await post('/api/call', { client: CLIENT, shop: shopId, product: st.pid, topic, question: q, phone: phone || null, consent: true });
+      const at = rec.earliest ? new Date(rec.earliest) : null;
+      out.innerHTML = `<div class="box-ok"><b>ثبت شد.</b> ${esc(rec.notice)}${at ? '<br>اولین زمان مجاز: ' + esc(at.toLocaleString('fa-IR', { timeZone: 'Asia/Tehran', dateStyle: 'short', timeStyle: 'short' })) : ''}</div>`;
+      refreshBadge();
+    } catch (e) {
+      out.innerHTML = `<div class="box-warn">${e.status === 429 ? 'سقف درخواست‌ها پر شده؛ کمی بعد تلاش کن.' : 'ثبت درخواست ناموفق بود.'}</div>`;
+    }
+  };
+  openDlg('بگذار ما تماس بگیریم', w);
+}
+
+
+/* ───────── پاساژها و بازارهای نزدیک ───────── */
+async function openHubs() {
+  const w = document.createElement('div'); w.style.display = 'grid'; w.style.gap = '12px';
+  w.innerHTML = '<div class="hint">در حال یافتن پاساژهای نزدیک…</div>';
+  openDlg('پاساژها و بازارهای نزدیک', w, true);
+  try {
+    const cat = st.cat && meta.cats[st.cat] ? meta.cats[st.cat].name : '';
+    const d = await api('/api/hubs', { lat: st.loc.lat, lng: st.loc.lng, rad: Math.min(Math.max(st.rad, 3), 20), cat });
+    const hs = d.hubs || [];
+    if (!hs.length) {
+      w.innerHTML = '<div class="empty"><b>در این محدوده پاساژ ثبت‌شده‌ای نیست.</b><div class="hint">«پاساژ» از آدرس ثبت‌شده‌ی فروشگاه‌ها استخراج می‌شود؛ اگر فروشگاه آن را در آدرس ننوشته باشد، اینجا نمی‌آید. شعاع را بزرگ‌تر کن یا موقعیت را روی نقشه جابه‌جا کن.</div></div>';
+      return;
+    }
+    w.innerHTML = `<div class="hint">بر اساس «پاساژ/بازار» نوشته‌شده در آدرس فروشگاه‌ها. تعداد فروشگاه یعنی نزدیکی جغرافیایی، نه شعبه‌ی یک برند.</div>
+     <div class="q-list">${hs.map((h, i) => `<div class="q-item">
+      <div class="row"><b>${esc(PD(h.name))}</b><span class="tag ${h.openNow ? 'ok' : ''}">${h.openNow ? fa(h.openNow) + ' فروشگاه باز' : 'الان بسته'}</span></div>
+      <div class="hint">${fa(h.shops)} فروشگاه${h.related ? ' · ' + fa(h.related) + ' هم‌دسته با این محصول' : ''} · ${fa1(h.km)} کیلومتر${h.etaMin ? ' · ~' + fa(h.etaMin) + ' دقیقه' : ''}</div>
+      <div class="adv-chips">${(h.sample || []).map(s2 => `<button type="button" class="chip" data-hs="${esc(s2.id)}">${esc(PD(s2.name))} · ${esc(s2.open === 'open' ? 'باز' : s2.open === 'closed' ? 'بسته' : 'نامشخص')}</button>`).join('')}</div>
+      <div class="ch-row"><button type="button" class="btn sm ghost" data-hm="${i}">${icon('map')} روی نقشه</button></div></div>`).join('')}</div>
+     <div class="hint">اگر محصول در این پاساژها در ترب ثبت نشده باشد، «موجود بودن» را نمی‌توانیم بگوییم؛ فقط می‌توانی سر راه ببینی.</div>`;
+    w.querySelectorAll('[data-hs]').forEach(b => b.onclick = () => {
+      const id = b.dataset.hs;
+      if (rowsCache.some(r => r.shop.id === id)) { closeDlg(); setView('list'); select(id); }
+      else toast('این فروشگاه برای این محصول آفِر ثبت‌شده ندارد؛ برای پرسش، از دسته‌ی فعالیتش استفاده کن.');
+    });
+    w.querySelectorAll('[data-hm]').forEach(b => b.onclick = () => { closeDlg(); showHubs(hs); });
+  } catch { w.innerHTML = '<div class="box-warn">دریافت فهرست پاساژها ناموفق بود.</div>'; }
+}
+
+/* ───────── برنامه‌ی مراجعه ───────── */
+async function openTrip() {
+  const ids = [...cmp]; if (ids.length < 2 || !st.pid) return;
+  const w = document.createElement('div'); w.style.display = 'grid'; w.style.gap = '12px';
+  w.innerHTML = '<div class="hint">در حال چیدن مسیر…</div>';
+  openDlg('برنامه‌ی مراجعه', w, true);
+  try {
+    const d = await api('/api/trip', { pid: st.pid, shops: ids.join(','), lat: st.loc.lat, lng: st.loc.lng }, null, 15000);
+    w.innerHTML = `<div class="hint">${fa(d.totalKm)} کیلومتر · ~${fa(d.totalMin)} دقیقه · ${fa(d.reachable)} ایستگاه قابل‌رسیدن</div>
+     <ol class="trip">${d.steps.map((p, i) => `<li class="${p.willMakeIt ? 'ok' : 'bad'}"><span class="rank">${fa(i + 1)}</span><div><b>${esc(PD(p.name))}</b> <span class="tag ${p.willMakeIt ? 'ok' : 'bad'}">${p.willMakeIt ? 'می‌رسی' : 'می‌رسی بسته است'}</span>
+      <div class="hint">${esc(p.place ? [p.place.mall, p.place.floor, p.place.unit].filter(Boolean).map(PD).join(' · ') : '')}</div>
+      <div class="hint">${fa(p.price)} تومان · ${fa1(p.kmFromPrev)} کیلومتر از ایستگاه قبل · رسیدن ~${PD(p.arriveAt)} (${fa(p.travelMin)} دقیقه راه)</div>
+      <div class="ch-row"><a class="btn sm ghost" target="_blank" rel="noopener noreferrer" href="${esc(mapDir(p.lat, p.lng))}">${icon('route')} مسیر</a>
+      ${p.tel ? `<a class="btn sm ghost" href="tel:${esc(String(p.tel).replace(/[^\d+]/g, ''))}">${icon('phone')} تماس</a>` : ''}
+      <button type="button" class="btn sm ghost" data-trip-ask="${esc(p.shop)}">${icon('chat')} بپرس</button></div></div></li>`).join('')}</ol>
+     <div class="hint">${esc(d.note)}</div><div class="hint">زمان‌ها تخمینی و بر اساس خط مستقیم است؛ ساعت کاری از برنامه‌ی ثبت‌شده‌ی فروشگاه خوانده می‌شود.</div>`;
+    w.querySelectorAll('[data-trip-ask]').forEach(b => b.onclick = () => openAsk(b.dataset.tripAsk));
+  } catch { w.innerHTML = '<div class="box-warn">برنامه‌ریزی مسیر ناموفق بود.</div>'; }
+}
+
 function renderList(X, d) {
   const list = $('#r-list'), best = X.length ? Math.min(...X.map(x => x.price)) : 0, nearest = X.filter(x => x.km != null).sort((a, b) => a.km - b.km)[0];
   if (!X.length) {
     const alts = d.alternatives || [];
     list.innerHTML = `<div class="empty" role="status"><b>نتیجه‌ای با این شرایط پیدا نشد.</b><div class="hint" style="margin:4px 0 10px">محدوده، بودجه یا فیلترها را تغییر دهید.</div><div class="acts" style="justify-content:center">${st.rad < 40 ? '<button type="button" class="btn sm" id="e-rad">افزایش شعاع به ۴۰ کیلومتر</button>' : ''}<button type="button" class="btn ghost sm" id="e-clr">حذف فیلترها</button></div>${alts.length ? '<div class="bk" style="margin-top:12px;text-align:start"><b>جایگزین‌های نزدیک (تفاوت در یک مشخصه):</b>' + alts.map((a, i) => `<div class="bk-i"><span>${esc(PD(a.product.title_fa))}<br><span class="hint">تفاوت: ${a.diff.map(k => esc(({ color: 'رنگ', ram: 'رم', storage: 'حافظه', size: 'سایز' }[k] || k) + ' ' + PD(a.product[k]))).join('، ')} · از ${fa(a.best.offer.price)} تومان${a.best.km == null ? '' : ' · ' + fa1(a.best.km) + ' کیلومتر'}</span></span><button type="button" class="btn sm" data-alt="${i}">نمایش این محصول</button></div>`).join('') + '</div>' : ''}</div>`;
     const r = $('#e-rad'); if (r) r.onclick = () => { st.rad = 40; st.fitNext = true; syncControls(); refresh(); };
-    $('#e-clr').onclick = () => { st.f = { inst: 0, open: 0, tp: 0, kb: 0, ex: 0 }; st.min = ''; st.max = ''; st.fitNext = true; syncControls(); refresh(); };
+    $('#e-clr').onclick = () => { st.f = { inst: 0, credit: 0, open: 0, tp: 0, kb: 0, ex: 0 }; st.min = ''; st.max = ''; st.fitNext = true; syncControls(); refresh(); };
     list.querySelectorAll('[data-alt]').forEach(b => b.onclick = () => { const p = alts[+b.dataset.alt].product; say('نمایش ' + esc(PD(p.title_fa)), 1); results(p); });
     return;
   }
@@ -375,25 +633,33 @@ function renderList(X, d) {
   list.innerHTML = X.map((x, i) => {
     const alt = x.hs !== 'open' ? openAlt(x) : null;
     const loc = x.place.length ? x.place.join(' · ') : (x.addr || 'آدرس ثبت نشده');
-    const ex = [`<span class="tag ${x.inst === true ? 'ok' : ''}">اقساط: ${instTxt(x)}</span>`, tri(x.tp, '<span class="tag ok">ترب‌پی</span>', '<span class="tag">بدون ترب‌پی</span>'), tri(x.kb, '<span class="tag ok">کالابرگ</span>', ''), tri(x.ex, '<span class="tag ok">ارسال فوری</span>', ''), `<span class="tag">${esc(x.warranty)}</span>`, `<span class="tag">منبع: ${x.src}</span>`, x.ig ? `<a class="tag info" href="${esc(x.ig)}" target="_blank" rel="noopener noreferrer">اینستاگرام</a>` : '', x.web ? `<a class="tag info" href="${esc(x.web)}" target="_blank" rel="noopener noreferrer">وب‌سایت</a>` : ''].filter(Boolean).join('');
+    const ex = [`<span class="tag ${x.inst === true ? 'ok' : ''}">اقساط: ${instTxt(x)}</span>`, `<span class="tag ${x.credit ? 'ok' : ''}" title="بر اساس سقف مبلغ و دسته‌ی همان ارائه‌دهنده">اقساط حضوری این آفر: ${x.credit ? 'بله' : 'خیر'}</span>`, tri(x.tp, '<span class="tag ok">ترب‌پی</span>', '<span class="tag">بدون ترب‌پی</span>'), tri(x.kb, '<span class="tag ok">کالابرگ</span>', ''), tri(x.ex, '<span class="tag ok">ارسال فوری</span>', ''), `<span class="tag">${esc(x.warranty)}</span>`, `<span class="tag">منبع: ${x.src}</span>`, x.ig ? `<a class="tag info" href="${esc(x.ig)}" target="_blank" rel="noopener noreferrer">اینستاگرام</a>` : '', x.web ? `<a class="tag info" href="${esc(x.web)}" target="_blank" rel="noopener noreferrer">وب‌سایت</a>` : ''].filter(Boolean).join('');
     const qd = inq[x.id + st.pid];
     return `<article class="shop${x.id === st.aid ? ' sel' : ''}" tabindex="0" role="group" aria-label="${esc(line(x))}"${x.id === st.aid ? ' aria-current="true"' : ''} style="animation-delay:${Math.min(i, 8) * 40}ms" data-id="${esc(x.id)}" data-price="${x.price}" data-km="${x.km == null ? '' : x.km}">
-     <div class="shop-h"><span class="rank" aria-hidden="true">${fa(i + 1)}</span><div class="shop-t"><h4>${esc(x.name)}</h4><div class="badges">${x.demo ? '<span class="tag">نمونه</span>' : ''}${x.price === best ? '<span class="tag ok">کمترین قیمت</span>' : ''}${nearest && nearest.id === x.id ? '<span class="tag info">نزدیک‌ترین</span>' : ''}<span class="tag ${x.hc}">${HS[x.hs][0]}</span></div></div><div class="pr"><b>${fa(x.price)}</b><small>${esc(x.unit)}</small></div></div>
+     <div class="shop-h"><span class="rank" aria-hidden="true">${fa(i + 1)}</span><div class="shop-t"><h4>${esc(x.name)}</h4><div class="badges">${x.price === best ? '<span class="tag ok">کمترین قیمت</span>' : ''}${nearest && nearest.id === x.id ? '<span class="tag info">نزدیک‌ترین</span>' : ''}<span class="tag ${x.hc}">${HS[x.hs][0]}</span></div></div><div class="pr"><b>${fa(x.price)}</b><small>${esc(x.unit)}</small></div></div>
      <div class="loc">${icon('pin')}<span>${esc(loc)}${x.place.length && x.addr ? `<span class="addr">${esc(x.addr)}</span>` : ''}</span></div>
-     <ul class="facts"><li>${icon('route')}<span>${esc(x.kmTxt)}<span class="rt" data-rt="${esc(x.id)}"></span></span></li><li>${icon('clock')}<span class="${x.hc}">${esc(x.hoursTxt)}</span></li><li>${icon('clock')}<span class="${x.ac}">${esc(x.ageTxt)}</span></li><li class="wn">؟ ${x.avail}</li></ul>
+     <ul class="facts"><li>${icon('route')}<span>${esc(x.kmTxt)}${x.etaMin ? ' · ~' + fa(x.etaMin) + ' دقیقه' : ''}<span class="rt" data-rt="${esc(x.id)}"></span></span></li><li>${icon('clock')}<span class="${x.hc}">${esc(x.hoursTxt)}</span></li><li>${icon('clock')}<span class="${x.ac}">${esc(x.ageTxt)}</span></li><li class="wn">؟ ${x.avail}</li></ul>
      <div class="extras">${ex}</div>
      ${alt ? `<div class="alt-hint"><span>${x.hs === 'closed' ? 'این فروشگاه الان بسته است.' : 'ساعت کاری این فروشگاه نامشخص است.'} جایگزین باز: <b>${esc(alt.name)}</b> · ${fa(alt.price)} تومان${alt.km != null ? ' · ' + fa1(alt.km) + ' کیلومتر' : ''}</span><button type="button" class="btn sm ghost" data-act="sel" data-id="${esc(alt.id)}">نمایش</button></div>` : ''}
      <details class="why"><summary>چرا این پیشنهاد؟</summary><p>${x.price === best ? 'کمترین قیمت ثبت‌شده؛ ' : ''}${nearest && nearest.id === x.id ? 'نزدیک‌ترین فروشگاه؛ ' : ''}امتیاز ترکیبی ${fa(x.score)} (قیمت نسبی + ۰٫۰۳×کیلومتر؛ کمتر بهتر است).${x.seller ? '<br>عنوان فروشنده: ' + esc(x.seller) : ''}${x.desc ? '<br>توضیح فروشنده: ' + esc(x.desc.slice(0, 200)) : ''}</p></details>
-     <div class="acts"><button type="button" class="btn grow" data-act="ask">${icon('chat')} پرسش از فروشنده</button>${x.hasLoc ? `<a class="btn ghost" target="_blank" rel="noopener noreferrer" href="${esc(dirHref(x))}">${icon('route')} مسیریابی</a><button type="button" class="btn ghost" data-act="map">${icon('map')} نقشه</button>` : ''}${x.tel ? `<a class="btn ghost" href="${esc(telHref(x.tel))}">${icon('phone')} تماس</a>` : ''}<label class="cmp-l"><input type="checkbox" data-c="${esc(x.id)}" ${cmp.has(x.id) ? 'checked' : ''}> مقایسه</label>${qd ? `<span class="tag ${ST_CLS[qd.status]}">${ST_FA[qd.status]}</span>` : ''}</div>
+     <div class="acts"><button type="button" class="btn grow" data-act="ask">${icon('chat')} پرسش از فروشنده</button>${x.hasLoc ? `<a class="btn ghost" target="_blank" rel="noopener noreferrer" href="${esc(dirHref(x))}">${icon('route')} مسیریابی</a><button type="button" class="btn ghost" data-act="map">${icon('map')} نقشه</button>` : ''}${x.tel ? `<a class="btn ghost" href="${esc(telHref(x.tel))}">${icon('phone')} تماس</a>` : ''}<button type="button" class="btn ghost" data-act="watch">${icon('bell')} زیر نظر</button><label class="cmp-l"><input type="checkbox" data-c="${esc(x.id)}" ${cmp.has(x.id) ? 'checked' : ''}> مقایسه</label>${qd ? `<span class="tag ${ST_CLS[qd.status]}">${ST_FA[qd.status]}</span>` : ''}</div>
     </article>`;
   }).join('');
 }
 function renderMap(X) {
   if (!mv) return;
   mv.setUser(st.loc, st.rad);
-  mv.setShops(X.filter(x => x.hasLoc).map(x => ({ id: x.id, lat: x.lat, lng: x.lng, label: fa(x.i + 1), title: line(x), tip: x.name + ' · ' + fa(x.price) + ' تومان', closed: x.hs === 'closed' })), st.aid);
+  mv.setShops(X.filter(x => x.hasLoc).map(x => ({ id: x.id, lat: x.lat, lng: x.lng, label: fa(x.i + 1), title: line(x), tip: x.name + ' · ' + fa(x.price) + ' تومان · ' + x.hoursTxt, state: x.hs })), st.aid);
+  if (mhubs.length) mv.setHubs(mhubs);
   if (st.fitNext) { st.fitNext = false; mv.fit([[st.loc.lat, st.loc.lng], ...X.filter(x => x.hasLoc).slice(0, 25).map(x => [x.lat, x.lng])]); }
   mv.invalidate();
+}
+let mhubs = [];
+function showHubs(hubs) {
+  mhubs = (hubs || []).slice(0, 6);
+  if (mv) { mv.setHubs(mhubs); if (mhubs.length) mv.fit(mhubs.map(h => [h.lat, h.lng]).concat([[st.loc.lat, st.loc.lng]])); }
+  setView('map');
+  if (!mhubs.length) toast('پاساژ ثبت‌شده‌ای در این محدوده پیدا نشد.');
 }
 function select(id, o = {}) {
   if (!box) return; const x = rowsCache.map(info).find(y => y.id === id); if (!x) return;
@@ -457,7 +723,8 @@ function openAsk(id) {
   if (wa) btn('chat', 'ارسال با واتساپ', () => { window.open(waHref(x.wa, ta.value.trim()), '_blank', 'noopener'); commit('whatsapp'); });
   if (tel) btn('phone', 'تماس تلفنی', () => { commit('phone'); location.href = telHref(tel); }, wa ? 'ghost' : '');
   btn('copy', 'کپی متن پیام', async () => { try { await navigator.clipboard.writeText(ta.value); toast('متن کپی شد'); } catch { ta.select(); toast('متن را دستی کپی کنید'); } commit('copy'); }, 'ghost');
-  if (!wa && !tel) { const n = document.createElement('div'); n.className = 'hint'; n.textContent = x.demo ? 'در داده‌ی نمونه راه ارتباطی ثبت نشده است؛ متن را کپی کنید.' : 'راه ارتباطی منتشرشده‌ای برای این فروشگاه ثبت نشده است؛ متن را کپی کنید یا مستقیم مراجعه کنید.'; w.querySelector('#ask-ch').after(n); }
+  btn('call', 'بگذار ما تماس بگیریم', () => { closeDlg(); openCall(id, topic, ta.value.trim()); }, 'ghost');
+  if (!wa && !tel) { const n = document.createElement('div'); n.className = 'hint'; n.textContent = 'راه ارتباطی منتشرشده‌ای برای این فروشگاه ثبت نشده است؛ متن را کپی کنید یا مستقیم مراجعه کنید.'; w.querySelector('#ask-ch').after(n); }
   openDlg('پرسش از فروشنده', w);
 }
 function backupsView(backs, fromId) {
@@ -484,23 +751,76 @@ function step2(w, rec, x) {
   });
 }
 
+const CALL_ST_FA = { queued: 'در صف تماس', sent: 'به سرویس تماس سپرده شد', answered: 'پاسخ ثبت شد', cancelled: 'لغو شد', failed: 'ناموفق' };
+const CALL_ST_CLS = { queued: 'info', sent: 'info', answered: 'ok', cancelled: '', failed: 'bad' };
 async function refreshBadge() {
-  try { const r = await api('/api/inquiries', { client: CLIENT }); const n = r.items.filter(i => i.status === 'pending' || i.status === 'not_sent').length; const b = $('#trk-n'); b.hidden = !n; b.textContent = fa(n); return r.items; } catch { return []; }
+  const b = $('#trk-n');
+  try {
+    const [q, w, c] = await Promise.all([
+      api('/api/inquiries', { client: CLIENT }).catch(() => ({ items: [] })),
+      api('/api/watches', { client: CLIENT }).catch(() => ({ items: [] })),
+      api('/api/calls', { client: CLIENT }).catch(() => ({ items: [] }))
+    ]);
+    const n = q.items.filter(i => i.status === 'pending' || i.status === 'not_sent').length
+      + w.items.filter(x => x.changed || x.targetHit).length
+      + c.items.filter(x => x.status === 'queued' || x.status === 'sent').length;
+    b.hidden = !n; b.textContent = n > 9 ? '۹+' : fa(n);
+    return { inquiries: q.items, watches: w.items, calls: c.items };
+  } catch { b.hidden = true; return { inquiries: [], watches: [], calls: [] }; }
 }
-async function openTracker() {
-  const body = openDlg('پیگیری پرسش‌ها', '<div class="hint">در حال دریافت…</div>', true);
+async function openTracker(tab) {
+  const body = openDlg('پیگیری‌ها', '<div class="hint">در حال دریافت…</div>', true);
+  let cur = tab || 'inq';
   const render = async () => {
-    const items = await refreshBadge();
-    if (!items.length) { body.innerHTML = '<div class="empty"><b>هنوز پرسشی ثبت نکرده‌اید.</b><div class="hint">از کارت هر فروشگاه «پرسش از فروشنده» را بزنید؛ اینجا می‌توانید وضعیت و پاسخ را پیگیری کنید.</div></div>'; return; }
-    body.innerHTML = `<div class="q-list">${items.map(i => `<div class="q-item" data-id="${i.id}"><div class="row"><b>${esc(PD(i.shopName || i.shop))}</b><span><span class="tag ${ST_CLS[i.status]}">${ST_FA[i.status]}</span>${i.availability ? ` <span class="tag">${AV_FA[i.availability]}</span>` : ''}</span></div><div class="hint">${esc(PD(i.productTitle || i.product))} · موضوع: ${TOPIC_FA[i.topic] || ''} · ${esc(ago(i.created))}</div>${i.message ? `<div class="hint" style="white-space:pre-line">${esc(i.message)}</div>` : ''}${i.status === 'answered' || i.status === 'failed' ? '' : `<div class="ch-row"><button type="button" class="btn sm" data-u="in_stock">موجود است</button><button type="button" class="btn sm ghost" data-u="out_of_stock">ناموجود است</button><button type="button" class="btn sm ghost" data-u="none">بی‌پاسخ ماند</button></div>`}</div>`).join('')}</div>`;
+    const d = await refreshBadge();
+    const T = [['inq', 'پرسش‌ها', d.inquiries.length], ['watch', 'هشدار قیمت', d.watches.length], ['call', 'درخواست تماس', d.calls.length]];
+    let html = `<div class="tabs" style="padding:0"><div class="seg" role="tablist">${T.map(([k, t, n]) => `<button type="button" role="tab" data-tb="${k}" aria-selected="${cur === k}">${t}${n ? ' <span class="tag">' + fa(n) + '</span>' : ''}</button>`).join('')}</div></div>`;
+    if (cur === 'inq') html += inqView(d.inquiries);
+    else if (cur === 'watch') html += watchView2(d.watches);
+    else html += callView2(d.calls);
+    body.innerHTML = html;
+    body.querySelectorAll('[data-tb]').forEach(b => b.onclick = () => { cur = b.dataset.tb; render(); });
     body.querySelectorAll('[data-u]').forEach(b => b.onclick = async () => {
       const id = +b.closest('.q-item').dataset.id, v = b.dataset.u;
       try { await post('/api/inquiry/update', { client: CLIENT, id, status: v === 'none' ? 'failed' : 'answered', availability: v === 'none' ? 'unknown' : v }); toast('ثبت شد'); render(); } catch { toast('ثبت ناموفق بود.'); }
     });
+    body.querySelectorAll('[data-cu]').forEach(b => b.onclick = async () => {
+      const id = +b.closest('.q-item').dataset.id, st2 = b.dataset.cu;
+      try {
+        await post('/api/call/update', { client: CLIENT, id, status: st2, ...(st2 === 'answered' ? { availability: b.dataset.av || 'unknown' } : {}) });
+        toast('ثبت شد'); render();
+      } catch { toast('ثبت ناموفق بود.'); }
+    });
+    body.querySelectorAll('[data-unwatch]').forEach(b => b.onclick = async () => {
+      try { await api('/api/watch', { client: CLIENT, id: b.dataset.unwatch }, { method: 'DELETE' }); toast('هشدار حذف شد'); render(); } catch { toast('حذف ناموفق بود.'); }
+    });
   };
   render();
 }
-$('#trk').onclick = openTracker;
+function inqView(items) {
+  if (!items.length) return '<div class="empty"><b>هنوز پرسشی ثبت نکرده‌اید.</b><div class="hint">از کارت هر فروشگاه «پرسش از فروشنده» را بزنید؛ اینجا می‌توانید وضعیت و پاسخ را پیگیری کنید.</div></div>';
+  return `<div class="q-list">${items.map(i => `<div class="q-item" data-id="${i.id}"><div class="row"><b>${esc(PD(i.shopName || i.shop))}</b><span><span class="tag ${ST_CLS[i.status]}">${ST_FA[i.status]}</span>${i.availability ? ` <span class="tag">${AV_FA[i.availability]}</span>` : ''}</span></div><div class="hint">${esc(PD(i.productTitle || i.product))} · موضوع: ${TOPIC_FA[i.topic] || ''} · ${esc(ago(i.created))}</div>${i.message ? `<div class="hint" style="white-space:pre-line">${esc(i.message)}</div>` : ''}${i.status === 'answered' || i.status === 'failed' ? '' : `<div class="ch-row"><button type="button" class="btn sm" data-u="in_stock">موجود است</button><button type="button" class="btn sm ghost" data-u="out_of_stock">ناموجود است</button><button type="button" class="btn sm ghost" data-u="none">بی‌پاسخ ماند</button></div>`}</div>`).join('')}</div>`;
+}
+function watchView2(items) {
+  if (!items.length) return '<div class="empty"><b>هشداری ثبت نشده.</b><div class="hint">در کارت نتایج «زیر نظر» را بزنید تا قیمت هدف یا باز شدن فروشگاه را رصد کنیم.</div></div>';
+  return `<div class="q-list">${items.map(w => {
+    const b = w.best;
+    return `<div class="q-item"><div class="row"><b>${esc(PD(w.productTitle || w.product))}</b><span>${w.targetHit ? '<span class="tag ok">به قیمت هدف رسید</span>' : w.changed ? '<span class="tag warn">تغییر کرده</span>' : '<span class="tag">بدون تغییر</span>'}</span></div>
+     <div class="hint">${w.shop ? 'فقط فروشگاه ' + esc(PD((b && b.name) || w.shop)) : 'همه‌ی فروشگاه‌ها'}${w.target ? ' · هدف: ' + fa(w.target) + ' تومان' : ''}${w.rad ? ' · شعاع ' + fa(w.rad) + ' کیلومتر' : ''}</div>
+     ${b ? `<div class="hint">الان: ${fa(b.price)} تومان · ${esc(PD(b.name))}${b.km != null ? ' · ' + fa1(b.km) + ' کیلومتر' : ''}${b.open ? ' · ' + (b.open === 'open' ? 'باز' : b.open === 'closed' ? 'بسته' : 'ساعت نامشخص') : ''}</div>` : '<div class="hint">فعلاً آفِر فعالی برای این محصول نیست.</div>'}
+     <div class="ch-row"><button type="button" class="btn sm ghost" data-unwatch="${w.id}">حذف هشدار</button></div></div>`;
+  }).join('')}</div>`;
+}
+function callView2(items) {
+  if (!items.length) return '<div class="empty"><b>درخواست تماسی ثبت نشده.</b><div class="hint">از کارت فروشگاه یا دیالوگ «رفتن به فروشگاه» می‌توانید بخواهید ما سؤالتان را بپرسیم. بدون رضایت شما هیچ تماسی گرفته نمی‌شود.</div></div>';
+  return `<div class="q-list">${items.map(c => `<div class="q-item" data-id="${c.id}"><div class="row"><b>${esc(PD(c.shopName || c.shop))}</b><span class="tag ${CALL_ST_CLS[c.status] || ''}">${CALL_ST_FA[c.status] || c.status}</span></div>
+   <div class="hint">${esc(PD(c.productTitle || c.product))} · موضوع: ${TOPIC_FA[c.topic] || ''} · ${esc(ago(c.created))}</div>
+   <div class="hint" style="white-space:pre-line">${esc(c.question || '')}</div>
+   ${c.earliest ? `<div class="hint">اولین زمان مجاز: ${esc(new Date(c.earliest).toLocaleString('fa-IR', { timeZone: 'Asia/Tehran', dateStyle: 'short', timeStyle: 'short' }))}</div>` : ''}
+   ${c.answer ? `<div class="hint"><b>پاسخ ثبت‌شده:</b> ${esc(c.answer)}</div>` : ''}
+   ${c.status === 'answered' || c.status === 'cancelled' || c.status === 'failed' ? '' : `<div class="ch-row"><button type="button" class="btn sm" data-cu="answered" data-av="in_stock">پاسخ: موجود است</button><button type="button" class="btn sm ghost" data-cu="answered" data-av="out_of_stock">پاسخ: ناموجود</button><button type="button" class="btn sm ghost" data-cu="cancelled">لغو درخواست</button></div>`}</div>`).join('')}</div>`;
+}
+$('#trk').onclick = () => openTracker();
 
 /* ───────── موقعیت‌یابی ───────── */
 function geo() {

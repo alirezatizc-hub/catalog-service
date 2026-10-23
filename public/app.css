@@ -40,7 +40,6 @@ a{color:var(--brand-ink)}
 .icon-btn:hover{background:rgb(255 255 255/.26)}
 .dlg .icon-btn{background:var(--surface2);color:var(--text)}
 .icon-btn .dot{position:absolute;top:5px;inset-inline-end:5px;min-width:18px;height:18px;border-radius:9px;background:#fff;color:var(--brand);font-size:11px;font-weight:800;display:grid;place-items:center;padding:0 4px;line-height:1}
-.demo{background:var(--warn-bg);color:var(--warn);text-align:center;font-size:13px;padding:6px 12px;font-weight:600}
 
 /* ───── فیلترهای انتخاب‌شده ───── */
 #crumbs{position:sticky;top:calc(var(--header-h) + env(safe-area-inset-top,0));z-index:20;max-width:1180px;margin:0 auto;padding:8px 16px 0;display:flex;gap:6px;overflow-x:auto;scrollbar-width:none;background:linear-gradient(var(--bg) 78%,transparent)}
@@ -273,3 +272,43 @@ input[type=range]{width:100%;accent-color:var(--brand);min-height:30px}
 @media(prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important;scroll-behavior:auto!important}}
 @media print{.composer,.top,#crumbs,.map-tools{display:none}}
 @counter-style persian{system:numeric;symbols:"۰" "۱" "۲" "۳" "۴" "۵" "۶" "۷" "۸" "۹"}
+
+/* ───────── تصمیم‌یار «الان کجا بروم؟» ───────── */
+.advice{margin:10px 16px 0;padding:12px 14px;border:1.5px solid var(--line);border-radius:16px;background:var(--surface);display:grid;gap:9px}
+.adv-h{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.adv-h h3{margin:0;font-size:15px;line-height:1.6}
+.adv-t{margin:0;font-size:13.5px;color:var(--muted);line-height:1.85}
+.adv-acts{display:flex;flex-wrap:wrap;gap:8px}
+.adv-g{display:grid;gap:6px;padding-top:8px;border-top:1px dashed var(--line)}
+.adv-lbl{font-size:13px;color:var(--brand-ink)}
+.adv-grid{display:grid;gap:8px;grid-template-columns:repeat(auto-fit,minmax(210px,1fr))}
+.advc{border:1px solid var(--line);border-radius:13px;padding:9px 10px;display:grid;gap:4px;background:var(--surface2)}
+.advc-h{display:flex;align-items:center;justify-content:space-between;gap:6px;font-size:14px}
+.advc-m{font-size:12.5px;color:var(--muted);line-height:1.7}
+.advc-f{display:flex;gap:10px;flex-wrap:wrap;font-size:12.5px;color:var(--muted)}
+.advc-f .pr{color:var(--text);font-weight:800;font-size:14px}
+.advc .ch-row{margin-top:2px}
+.adv-chips{display:flex;flex-wrap:wrap;gap:6px}
+.adv-chips .chip{min-height:34px;font-size:12.5px;padding:3px 12px}
+.why{font-size:13px;color:var(--muted)}
+.why summary{cursor:pointer;font-weight:600;color:var(--text)}
+.warns{margin:6px 0 0;padding-inline-start:18px;font-size:12.5px;line-height:1.9;color:var(--muted)}
+.box-warn{padding:8px 11px;border-radius:11px;background:var(--warn-bg);color:var(--warn);font-size:13px;line-height:1.8}
+.box-ok{padding:8px 11px;border-radius:11px;background:var(--ok-bg);color:var(--ok);font-size:13px;line-height:1.8}
+.row-chk{display:flex;gap:8px;align-items:flex-start;font-size:13px;line-height:1.8;color:var(--muted)}
+.row-chk input{margin-top:5px;width:18px;height:18px;accent-color:var(--brand);flex:none}
+.go-grid{display:grid;gap:10px;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));text-align:center}
+.go-grid b{display:block;font-size:15px}
+.sk-row{height:52px;border-radius:12px;background:linear-gradient(90deg,var(--surface2),var(--surface),var(--surface2));background-size:200% 100%;animation:sk 1.2s infinite}
+
+/* برنامه‌ی مراجعه */
+.trip{display:grid;gap:8px;margin:0;padding:0;list-style:none;counter-reset:t}
+.trip li{display:flex;gap:9px;border:1px solid var(--line);border-inline-start:4px solid var(--ok);border-radius:12px;padding:8px 10px}
+.trip li.bad{border-inline-start-color:var(--bad)}
+.trip .rank{flex:none;width:24px;height:24px;border-radius:50%;background:var(--surface2);display:grid;place-items:center;font-size:12.5px;font-weight:800}
+
+/* نشانگرهای نقشه (پین فروشگاه، پاساژ و موقعیت کاربر) */
+.pin.unk span{border-style:dashed;border-color:#8a93a6;color:#566074}
+.hub-pin{background:none;border:0}
+.hub-pin span{position:relative;display:grid;place-items:center;min-width:34px;height:26px;padding:0 6px;border-radius:9px;background:#7c3aed;color:#fff;font:800 12px/1 Vazirmatn,sans-serif;box-shadow:0 2px 6px rgb(0 0 0/.35)}
+.hub-pin span::after{content:'';position:absolute;bottom:-4px;left:50%;translate:-50% 0;border:4px solid transparent;border-top-color:#7c3aed}
