@@ -32,4 +32,4 @@ function createServer(data,{demo}={}){const ix=new Index(data),CATS=data.registr
   }catch(e){send(r,500,{error:'server_error'})}})}
 module.exports={createServer};
 if(require.main===module){const real=loadDir(process.env.DATA_DIR||path.join(__dirname,'data'));const data=real||build(require('./src/demo'),{demo:true});if(real)console.log(JSON.stringify(real.report.issues),real.report.errors);else console.log('داده‌ی نمونه (Demo) بارگذاری شد');
- createServer(data,{demo:!real}).listen(process.env.PORT||3000,()=>console.log('http://localhost:'+(process.env.PORT||3000)))}
+ const port=Number(process.env.PORT)||3000;const server=createServer(data,{demo:!real});server.on('error',e=>{console.error('[startup] HTTP server failed:',e);process.exitCode=1});server.listen(port,'0.0.0.0',()=>console.log(JSON.stringify({event:'server_ready',host:'0.0.0.0',port,demo:!real,products:data.products.length,shops:data.shops.length,offers:data.offers.length})));}
