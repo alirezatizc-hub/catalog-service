@@ -4,6 +4,7 @@
 // ردیف‌های PostgreSQL را می‌بلعد؛ برای دیتاست بزرگ (۳۳۱ هزار آفر) حالت
 // createBuilder() بدون نگه‌داشتن نسخه‌ی خام کل جدول‌ها کار می‌کند.
 const fs = require('fs'), path = require('path'), S = require('./schema'), { nm } = require('../engine');
+const { OfferStore } = require('./offer-store');
 
 /* ───────── CSV ───────── */
 function parseCSV(t) {
@@ -281,6 +282,11 @@ function createBuilder({ schema = {} } = {}) {
   const CF = S.merge(S.CONFIRMED, schema.CONFIRMED);
   const shopCand = { id: [CF.shops.id], ...S.SHOP_FIELDS };
   const AL = { ...S.SPEC_ALIASES, ...(schema.SPEC_ALIASES || {}) };
+  // نگاشت «هر کلید هم‌معنی (و شکل نرمال‌شده‌اش) → فیلد اصلی» یک‌بار ساخته می‌شود
+  const AX = new Map();
+  for (const [lk, names] of Object.entries(AL)) {
+    for (const n of names) { if (!AX.has(n)) AX.set(n, lk); const q = nm(n); if (!AX.has(q)) AX.set(q, lk); }
+  }
   const EX = { ...S.EXTRA, ...(schema.EXTRA || {}) };
   const CORE = schema.CORE || S.CORE;
   const over = schema.SHOPS || {};
@@ -292,13 +298,67 @@ function createBuilder({ schema = {} } = {}) {
   };
 
   const resolved = {};
-  const shops = [], products = [], offers = [];
-  const sid = new Set(), pid = new Set(), used = new Set();
+  const shops = [], products = [];
+  const offers = new OfferStore();
+  const sid = new Set(), pid = new Set();
+  const usedFlag = [];              // ۱ = این محصول حداقل یک آفِر معتبر دارد (به‌جای Set شناسه‌ها)
+  const prodCat = [];               // catId هر محصول (هم‌تراز با products)
   const shopById = new Map();
-  const kvList = []; // [product, Map] فقط برای محصولات دارای specs
-  const keyCount = new Map(), keyVals = new Map(), matched = new Set();
+  const shopPos = new Map(), prodPos = new Map(); // شناسه → اندیس در آرایه (برای ذخیرهٔ ستونی)
+  const matched = new Set();
   const intern = new Map();
-  const pool = s => { if (s == null) return s; const hit = intern.get(s); if (hit) return hit; if (intern.size < 250000) intern.set(s, s); return s; };
+  const pool = s => { if (s == null) return s; const hit = intern.get(s); if (hit) return hit; if (intern.size < 150000) intern.set(s, s); return s; };
+
+  // ── مشخصات (specs) به‌صورت ستونی ───────────────────────────────────────────
+  // نگه‌داشتن Map برای هر محصول ۲۲۵ هزار Map و در نتیجه صدها مگابایت می‌شد؛
+  // اینجا فقط سه آرایهٔ عددی (محصول، کلید، مقدار) داریم.
+  const catIds = new Map(), catNames = [];
+  const catId = c => { let i = catIds.get(c); if (i == null) { i = catNames.length; catIds.set(c, i); catNames.push(c); } return i; };
+  const keyIds = new Map(), keyNames = [];
+  const keyId = k => { let i = keyIds.get(k); if (i == null) { i = keyNames.length; keyIds.set(k, i); keyNames.push(k); } return i; };
+  const valIds = new Map(), valNames = [];
+  const VAL_CAP = 150000, SPEC_CAP = 4000000;
+  const valId = v => {
+    let i = valIds.get(v);
+    if (i == null) { if (valNames.length >= VAL_CAP) return -1; i = valNames.length; valIds.set(v, i); valNames.push(v); }
+    return i;
+  };
+  let spProd = new Int32Array(1 << 16), spKey = new Int32Array(1 << 16), spVal = new Int32Array(1 << 16), spN = 0;
+  const pushSpec = (p, k, v) => {
+    if (spN >= SPEC_CAP) return;
+    if (spN === spProd.length) {
+      const cap = spProd.length * 2;
+      const a = new Int32Array(cap); a.set(spProd); spProd = a;
+      const b = new Int32Array(cap); b.set(spKey); spKey = b;
+      const c = new Int32Array(cap); c.set(spVal); spVal = c;
+    }
+    spProd[spN] = p; spKey[spN] = k; spVal[spN] = v; spN++;
+  };
+  const catKeyCount = new Map(); // catId * 4096 + keyId → تعداد محصولات دارای این کلید
+  const CKK = 4096;
+
+  // متن‌های تکراری آفِرها (عنوان فروشنده، توضیح، متن گارانتی) یک‌بار نگه داشته می‌شوند؛
+  // وگرنه ۳۳۱ هزار رشتهٔ جدا با محتوای یکسان ده‌ها مگابایت حافظه می‌گیرند.
+  const mkPool = cap => {
+    const m = new Map();
+    return s => {
+      if (s == null) return null;
+      const hit = m.get(s); if (hit) return hit;
+      if (m.size >= cap) return null;   // از سقف که گذشت، برای جلوگیری از انفجار حافظه رها می‌شود
+      m.set(s, s);
+      return s;
+    };
+  };
+  const oSeller = mkPool(120000), oWarranty = mkPool(4000), oDesc = mkPool(30000);
+  const txt = s => { const v = val(s); return v && v.length > 240 ? v.slice(0, 240) : v; };
+  // شکل ثابت محصول: پیش‌مقداردهی همهٔ کلیدهای ممکن تا آبجکت از حالت dictionary خارج نشود
+  const ALIAS_KEYS = Object.keys(AL);
+  function newProduct(id, cat, title, brand, model, image) {
+    const p = { id, cat, title_fa: title, brand, model, image };
+    for (const k of ALIAS_KEYS) if (!(k in p)) p[k] = undefined;
+    for (let i = 1; i <= EX.maxFilters; i++) p['x' + i] = undefined;
+    return p;
+  }
 
   function cols(table, given) {
     if (resolved[table]) return resolved[table];
@@ -358,7 +418,7 @@ function createBuilder({ schema = {} } = {}) {
         ig: urlOf(g(r, 'instagram'), 'instagram'), web: urlOf(g(r, 'website'), 'web'),
         hasProducts: false
       };
-      shops.push(shop); shopById.set(id, shop);
+      shops.push(shop); shopById.set(id, shop); shopPos.set(id, shops.length - 1);
     });
     return done ? done.then(() => t.rows) : t.rows;
   }
@@ -376,27 +436,35 @@ function createBuilder({ schema = {} } = {}) {
       pid.add(id);
       const j = json(R.specs ? r[R.specs] : null);
       if (j.err) rep.issues.badSpecs++;
-      const kv = new Map();
+      const p = newProduct(
+        id, val(R.cat ? r[R.cat] : null) || 'نامشخص',
+        val(r[R.title_fa]), val(R.brand ? r[R.brand] : null) ?? undefined,
+        val(R.model ? r[R.model] : null) ?? undefined,
+        imagesOf(R.images ? r[R.images] : null)[0] || undefined
+      );
+      // مشخصات: بدون Map برای هر محصول. کلیدهای هم‌معنی همان‌جا به فیلد اصلی
+      // نگاشت می‌شوند و بقیه در آرایهٔ ستونی می‌مانند.
+      const rest = [];
       if (Array.isArray(j.v)) {
+        const seen = new Set();
         for (const e of j.v) {
           const k = e && val(e.key), v = e && sv(e.value);
-          if (k && v && !kv.has(k)) kv.set(pool(k), pool(v));
+          if (!k || !v || k.length > 80 || v.length > 80 || seen.has(k)) continue;
+          seen.add(k);
+          const lk = AX.get(k) || AX.get(nm(k));
+          if (lk) { if (p[lk] === undefined) { p[lk] = pool(v); matched.add(lk); } continue; }
+          rest.push(k, v);
         }
       }
-      const p = {
-        id, cat: val(R.cat ? r[R.cat] : null) || 'نامشخص',
-        title_fa: val(r[R.title_fa]), brand: val(R.brand ? r[R.brand] : null) ?? undefined,
-        model: val(R.model ? r[R.model] : null) ?? undefined,
-        image: imagesOf(R.images ? r[R.images] : null)[0]
-      };
-      for (const [lk, names] of Object.entries(AL)) {
-        let hit = null;
-        for (const n of names) { const k = kv.has(n) ? n : (kv.has(nm(n)) ? nm(n) : null); if (k) { hit = k; break; } }
-        if (hit) { p[lk] = kv.get(hit); kv.delete(hit); matched.add(lk); }
+      const pos = products.length, cid = catId(p.cat);
+      products.push(p); prodPos.set(id, pos); usedFlag.push(0); prodCat.push(cid);
+      for (let i = 0; i < rest.length; i += 2) {
+        const ki = keyId(rest[i]), vi = valId(rest[i + 1]);
+        if (vi < 0) continue;
+        pushSpec(pos, ki, vi);
+        const ck = cid * CKK + ki;
+        catKeyCount.set(ck, (catKeyCount.get(ck) || 0) + 1);
       }
-      for (const k of kv.keys()) { const ck = p.cat + '\u0000' + k; keyCount.set(ck, (keyCount.get(ck) || 0) + 1); }
-      products.push(p);
-      if (kv.size) kvList.push([p, kv]);
     });
     return done ? done.then(() => t.rows) : t.rows;
   }
@@ -418,12 +486,12 @@ function createBuilder({ schema = {} } = {}) {
       const w = warrantyOf(R.warranty ? r[R.warranty] : null);
       const up = R.updated ? val(r[R.updated]) : null;
       const ts = up ? Date.parse(lat(up)) : NaN;
-      used.add(pr);
-      offers.push({
-        shop: sh, product: pr, price,
-        unit: 'تومان', updated: Number.isNaN(ts) ? null : new Date(ts).toISOString(),
-        warranty: w ? w.text : null, seller: R.seller ? val(r[R.seller]) : null,
-        description: R.description ? val(r[R.description]) : null
+      const pPos = prodPos.get(pr), sPos = shopPos.get(sh);
+      if (pPos == null || sPos == null) { rep.issues.orphanOffers++; rep.issues.badOffers++; return; }
+      usedFlag[pPos] = 1;
+      offers.push(sPos, pPos, price, Number.isNaN(ts) ? NaN : ts, {
+        warranty: w ? oWarranty(w.text) : null, seller: R.seller ? oSeller(txt(r[R.seller])) : null,
+        description: R.description ? oDesc(txt(r[R.description])) : null
       });
     });
     return done ? done.then(() => t.rows) : t.rows;
@@ -432,59 +500,72 @@ function createBuilder({ schema = {} } = {}) {
   function finish() {
     // ساخت فیلترهای پویا از specs در سه گام کم‌حافظه:
     // ۱) نامزدها بر اساس پوشش، ۲) شمارش مقادیر یکتا با سقف، ۳) نشاندن مقدار روی محصول
-    const byCat = {};
-    for (const p of products) (byCat[p.cat] = byCat[p.cat] || []).push(p);
+    // نامزدهای فیلتر از روی شمارش ستونی (catId × keyId) — بدون رشته‌سازی برای هر ردیف
+    const catCount = new Int32Array(catNames.length);
+    for (let i = 0; i < prodCat.length; i++) catCount[prodCat[i]]++;
     const cands = [];
-    for (const [cat, list] of Object.entries(byCat)) {
-      for (const [ck, n] of keyCount) {
-        if (!ck.startsWith(cat + '\u0000')) continue;
-        if (n / list.length < EX.minCoverage) continue;
-        cands.push({ cat, key: ck.slice(cat.length + 1), n });
-      }
+    for (const [ck, n] of catKeyCount) {
+      const cid = Math.floor(ck / CKK), ki = ck % CKK, total = catCount[cid];
+      if (!total || n / total < EX.minCoverage) continue;
+      cands.push({ cid, ki, key: keyNames[ki], n });
     }
     cands.sort((a, b) => b.n - a.n);
+    // ۲) مجموعهٔ مقادیر یکتا برای نامزدها (فقط شناسه‌های عددی، با سقف)
     const sets = new Map();
-    for (const c of cands) sets.set(c.cat + '\u0000' + c.key, new Set());
-    for (const [p, kv] of kvList) {
-      for (const [k, v] of kv) {
-        const set = sets.get(p.cat + '\u0000' + k);
-        if (set && set.size <= EX.maxValues) set.add(v);
+    for (const c of cands) sets.set(c.cid * CKK + c.ki, new Set());
+    for (let i = 0; i < spN; i++) {
+      const set = sets.get(prodCat[spProd[i]] * CKK + spKey[i]);
+      if (set && set.size <= EX.maxValues) set.add(spVal[i]);
+    }
+    // ۳) انتخاب فیلترها و نشاندن مقدار روی محصول
+    const xid = new Map(); let xi = 0;
+    const chosenCk = new Set();
+    const picked = new Int32Array(catNames.length);
+    for (const c of cands) {
+      const set = sets.get(c.cid * CKK + c.ki);
+      if (!set || set.size < 2 || set.size > EX.maxValues) continue;
+      if (++picked[c.cid] > EX.maxFilters) continue;
+      if (!xid.has(c.key)) xid.set(c.key, 'x' + (++xi));
+      chosenCk.add(c.cid * CKK + c.ki);
+    }
+    const hasSpec = new Uint8Array(products.length);
+    if (chosenCk.size) {
+      for (let i = 0; i < spN; i++) {
+        const pos = spProd[i], ck = prodCat[pos] * CKK + spKey[i];
+        if (!chosenCk.has(ck)) continue;
+        const k = xid.get(keyNames[spKey[i]]), p = products[pos];
+        if (p[k] === undefined) { p[k] = valNames[spVal[i]]; hasSpec[pos] = 1; }
       }
     }
-    const xid = new Map(); let xi = 0;
-    const chosen = new Set();
-    const picked = {};
-    for (const c of cands) {
-      const set = sets.get(c.cat + '\u0000' + c.key);
-      if (!set || set.size < 2 || set.size > EX.maxValues) continue;
-      const usage = picked[c.cat] = (picked[c.cat] || 0) + 1;
-      if (usage > EX.maxFilters) continue;
-      if (!xid.has(c.key)) xid.set(c.key, 'x' + (++xi));
-      chosen.add(c.key);
-    }
-    if (chosen.size) {
-      for (const [p, kv] of kvList) for (const k of chosen) if (kv.has(k) && p[xid.get(k)] === undefined) p[xid.get(k)] = kv.get(k);
-    }
-    kvList.length = 0;
+    spProd = spKey = spVal = null; sets.clear();
 
-    const live = products.filter(p => used.has(p.id));
-    const liveSet = new Set(live.map(p => p.id));
-    const offersOut = offers.filter(o => liveSet.has(o.product));
-    for (const o of offersOut) { const s = shopById.get(o.shop); if (s) s.hasProducts = true; }
+    // ۴) فقط محصولات دارای آفِر می‌مانند؛ نگاشت اندیس قدیم→جدید برای حذف آفِرهای مرده
+    const live = [], remap = new Int32Array(products.length);
+    for (let i = 0; i < products.length; i++) {
+      if (!usedFlag[i]) { remap[i] = -1; continue; }
+      remap[i] = live.length; live.push(products[i]);
+    }
+    const offersOut = offers.keep(remap).bind(live, shops);
+    products.length = 0; // خود آبجکت‌ها در live هستند؛ فقط جای خالی آرایه آزاد می‌شود
+
+    for (let i = 0; i < offersOut.length; i++) { const s = shops[offersOut.shopPos[i]]; if (s) s.hasProducts = true; }
     rep.issues.shopsWithoutProducts = shops.filter(s => !s.hasProducts).length;
 
     const cats = {}, liveByCat = {};
-    for (const p of live) (liveByCat[p.cat] = liveByCat[p.cat] || []).push(p);
+    for (let i = 0; i < live.length; i++) { const p = live[i]; (liveByCat[p.cat] = liveByCat[p.cat] || []).push(p); }
     for (const [cat, list] of Object.entries(liveByCat)) {
       const steps = [], cov = k => list.filter(p => p[k] != null).length;
       for (const [k, l] of CORE) if (cov(k) / list.length >= 0.02) steps.push([k, l]);
-      for (const [k, id] of xid) if (keyCount.has(cat + '\u0000' + k)) steps.push([id, k]);
+      const cid = catIds.get(cat);
+      for (const [k, id] of xid) { const ki = keyIds.get(k); if (ki != null && chosenCk.has(cid * CKK + ki)) steps.push([id, k]); }
       cats[cat] = { name: cat, count: list.length, steps };
     }
     const top = {};
-    for (const [ck, n] of keyCount) { const k = ck.split('\u0000')[1]; top[k] = (top[k] || 0) + n; }
+    for (const [ck, n] of catKeyCount) { const k = keyNames[ck % CKK]; top[k] = (top[k] || 0) + n; }
+    let withSpecs = 0;
+    for (let i = 0; i < remap.length; i++) if (remap[i] >= 0 && hasSpec[i]) withSpecs++;
     rep.specs = {
-      productsWithSpecs: live.filter(p => Object.keys(p).some(k => k.startsWith('x'))).length,
+      productsWithSpecs: withSpecs,
       matchedCore: [...matched], unmatchedCore: Object.keys(AL).filter(k => !matched.has(k)),
       topKeys: Object.entries(top).sort((a, b) => b[1] - a[1]).slice(0, 40)
     };

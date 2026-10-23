@@ -184,6 +184,7 @@ function createServer(initialData, opts = {}) {
         startedAt: new Date(state.startedAt).toISOString(), loadedAt: state.loadedAt ? new Date(state.loadedAt).toISOString() : null,
         loadMs: state.loadedAt ? state.loadedAt - state.startedAt : null,
         memoryMb: Math.round(process.memoryUsage().rss / 1048576),
+        heap: (() => { const m = process.memoryUsage(), v = require('v8').getHeapStatistics(); return { usedMb: Math.round(m.heapUsed / 1048576), totalMb: Math.round(m.heapTotal / 1048576), limitMb: Math.round(v.heap_size_limit / 1048576) }; })(),
         env: db.envReport(), db: state.dbInfo, counts: state.data ? state.data.report.counts : null,
         storeFallback: !!state.storeFallbackReason, hint: state.dbInfo ? state.dbInfo.hint || null : null,
         mapping: state.data ? state.data.report.tables : null, issues: state.data ? state.data.report.issues : null,
@@ -497,6 +498,8 @@ async function loadDataset({ onState } = {}) {
 module.exports = { createServer, loadDataset, watchView };
 if (require.main === module) {
   const port = Number(process.env.PORT) || 3000;
+  const hv0 = require('v8').getHeapStatistics();
+  console.log(JSON.stringify({ event: 'boot', node: process.version, heapLimitMb: Math.round(hv0.heap_size_limit / 1048576), maxOldSpaceMb: process.env.NODE_HEAP_MB || null }));
   const server = createServer(null, { loading: true });
   server.listen(port, '0.0.0.0', () => console.log(JSON.stringify({ event: 'server_listening', host: '0.0.0.0', port, node: process.version })));
   server.on('error', e => { console.error('[startup] HTTP server failed:', e); process.exitCode = 1; });
@@ -511,7 +514,12 @@ if (require.main === module) {
     }
     st.data = data; st.ix = new Index(data); st.ix.registry = data.registry; st.store = db.createStore(pool);
     st.source = source; st.ready = true; st.loadedAt = Date.now();
-    console.log(JSON.stringify({ event: 'dataset_ready', source, ms, counts: data.report.counts, db: pool ? 'postgres' : 'memory', memoryMb: Math.round(process.memoryUsage().rss / 1048576) }));
+    const mu = process.memoryUsage(), hv = require('v8').getHeapStatistics();
+    console.log(JSON.stringify({
+      event: 'dataset_ready', source, ms, counts: data.report.counts, db: pool ? 'postgres' : 'memory',
+      memoryMb: Math.round(mu.rss / 1048576), heapUsedMb: Math.round(mu.heapUsed / 1048576),
+      heapTotalMb: Math.round(mu.heapTotal / 1048576), heapLimitMb: Math.round(hv.heap_size_limit / 1048576)
+    }));
   }).catch(e => {
     server.state.loading = false; server.state.ready = false; server.state.error = e.message;
     console.error('[startup]', e);

@@ -179,7 +179,7 @@ function s(now, shop) {
 function planTrip(ix, pid, shopIds, { loc, now = new Date() } = {}) {
   const product = ix.P.get(pid);
   if (!product || !valid(loc) || !Array.isArray(shopIds) || !shopIds.length) return null;
-  const rows = (ix.byP.get(pid) || []).map(o => ({ offer: o, shop: ix.S.get(o.shop) })).filter(r => r.shop && shopIds.includes(r.shop.id));
+  const rows = ix.offerList(pid).map(o => ({ offer: o, shop: ix.S.get(o.shop) })).filter(r => r.shop && shopIds.includes(r.shop.id));
   if (!rows.length) return null;
   const left = rows.slice();
   const plan = [];
