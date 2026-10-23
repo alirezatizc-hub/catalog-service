@@ -137,3 +137,67 @@ test('DIAG_TOKEN اگر تنظیم شده باشد، گزارش بدون توک�
     assert.equal((await fetch(base + '/doctor', { headers: { 'x-diag-token': 'tok-1234' } })).status, 200);
   } finally { s.close(); delete process.env.DIAG_TOKEN; }
 });
+
+/* ───────── خواندن دیتاست از PostgreSQL (مسیری که روی لیارا اجرا می‌شود) ───────── */
+const { createBuilder } = require('../src/data/loader');
+const { make } = require('./real-fixture');
+
+// استخر ساختگی که مثل pg با rowMode:'array' صفحه‌بندی می‌کند
+function pagedPool(all, pageSize) {
+  const calls = [];
+  return {
+    calls,
+    async query(cfg) {
+      if (typeof cfg === 'string') return { rows: [] };
+      calls.push(cfg);
+      const cols = /^SELECT (.*?) FROM/.exec(cfg.text)[1].split(',').map(x => x.replace(/"/g, '').trim());
+      const last = cfg.text.includes('WHERE') ? cfg.values[0] : null;
+      const limit = cfg.values[cfg.values.length - 1];
+      let rest = all.filter(r => last == null || String(r.shop_id) > String(last));
+      rest = rest.slice(0, limit);
+      return { rows: rest.map(r => cols.map(c => (r[c] == null ? null : String(r[c])))) };
+    }
+  };
+}
+
+test('pageRows همه‌ی ردیف‌ها را صفحه‌به‌صفحه و بدون تکرار برمی‌گرداند', async () => {
+  const all = Array.from({ length: 45 }, (_, i) => ({ shop_id: 's' + String(i + 1).padStart(3, '0'), name: 'فروشگاه ' + (i + 1) }));
+  const pool = pagedPool(all, 20);
+  const got = [];
+  for await (const r of db.pageRows(pool, 'shops', ['shop_id', 'name'], 'shop_id', 20)) got.push(r);
+  assert.equal(got.length, 45, 'همه‌ی ردیف‌ها باید خوانده شوند');
+  assert.equal(new Set(got.map(x => x.shop_id)).size, 45, 'نباید تکراری باشد');
+  assert.equal(got[0].name, 'فروشگاه 1');
+  assert.equal(pool.calls.length, 3, 'باید سه صفحه بخواند');
+  assert.match(pool.calls[1].text, /WHERE "shop_id" > \$1/);
+});
+
+test('سازنده‌ی داده جریان ناهمگام (AsyncIterator) را مثل آرایه می‌پذیرد — رگرسیون «rows is not iterable»', async () => {
+  const raw = make();
+  // مسیر فایل: آرایه‌های همگام
+  const plain = (() => { const b = createBuilder({}); b.addShops(raw.shops.rows, raw.shops.cols); b.addProducts(raw.products.rows, raw.products.cols); b.addOffers(raw.offers.rows, raw.offers.cols); return b.finish(); })();
+
+  // مسیر دیتابیس: دقیقاً همان چیزی که server.js به add* می‌دهد
+  async function* asStream(rows) { for (const r of rows) yield r; }
+  const b = createBuilder({});
+  await b.addShops(asStream(raw.shops.rows), raw.shops.cols);
+  await b.addProducts(asStream(raw.products.rows), raw.products.cols);
+  await b.addOffers(asStream(raw.offers.rows), raw.offers.cols);
+  const streamed = b.finish();
+
+  assert.deepEqual(streamed.report.counts, plain.report.counts);
+  assert.equal(streamed.report.counts.shops, 7);
+  assert.equal(streamed.report.counts.offers, 10);
+  assert.deepEqual(streamed.shops.map(s => s.id).sort(), plain.shops.map(s => s.id).sort());
+  assert.equal(streamed.offers.length, plain.offers.length);
+  // فیلترهای پویا هم باید ساخته شوند
+  assert.ok(Object.keys(streamed.registry.cats).length > 0);
+});
+
+test('add* برای آرایه همگام مقدار عددی برمی‌گرداند و رفتار قبلی عوض نشده', () => {
+  const raw = make();
+  const b = createBuilder({});
+  assert.equal(b.addShops(raw.shops.rows, raw.shops.cols), 7);
+  assert.equal(b.addProducts(raw.products.rows, raw.products.cols), 3);
+  assert.equal(b.addOffers(raw.offers.rows, raw.offers.cols), 10); // شمارش ردیف‌های خوانده‌شده، نه معتبرها
+});

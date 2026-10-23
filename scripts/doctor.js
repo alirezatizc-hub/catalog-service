@@ -143,7 +143,7 @@ let pool = null;
         const table = det.tables[role], columns = cols.get(table) || [];
         const idCol = ALIASES[role].find(c => columns.includes(c));
         if (!idCol) { bad(`${role}: ستون شناسه پیدا نشد`); continue; }
-        builder['add' + role[0].toUpperCase() + role.slice(1)](db.pageRows(pool, table, columns, idCol), columns);
+        await (builder['add' + role[0].toUpperCase() + role.slice(1)])(db.pageRows(pool, table, columns, idCol), columns);
       }
       const data = builder.finish();
       const c = data.report.counts;
