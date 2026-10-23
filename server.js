@@ -63,7 +63,7 @@ function createServer(data, { demo, store, source } = {}) {
 
   async function handle(q, r) {
     const u = new URL(q.url, 'http://x'), g = k => u.searchParams.get(k), p = u.pathname, ip = q.socket.remoteAddress || '';
-    if (p === '/api/meta') return send(r, 200, { demo: !!demo, cats: CATS, statuses: STATUSES, map: geo.mapConfig(), mapProvider: geo.mapConfig().provider, routing: geo.mapConfig().routing, ai: llm.enabled(), db: store.kind, source: source || (demo ? 'demo' : 'files'), dataOk: data.report.ok, counts: { products: ix.P.size, shops: ix.S.size } });
+    if (p === '/api/meta') return send(r, 200, { demo: !!demo, cats: CATS, statuses: STATUSES, map: geo.mapConfig(), mapProvider: geo.mapConfig().provider, routing: geo.mapConfig().routing, ai: llm.enabled(), db: store.kind, source: source || (demo ? 'demo' : 'files'), dataOk: data.report.ok, report: data.report, counts: { products: ix.P.size, shops: ix.S.size } });
     if (p === '/api/options' || p === '/api/products') {
       const cat = g('cat'); if (!CATS[cat]) return send(r, 400, { error: 'bad_cat' });
       const sel = {}; for (const [k, v] of u.searchParams) if (!['cat', 'key', 'q'].includes(k) && key(k)) sel[k] = v;
