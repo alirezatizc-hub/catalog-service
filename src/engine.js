@@ -137,9 +137,14 @@ class Index {
   // پرس‌وجو چند ده میلی‌ثانیه است، ولی حافظهٔ دائمی صفر.
   _hayText(i) { const p = this.items[i]; return nm([p.title_fa, p.title_en, p.brand, p.model, p.color, p.cat].filter(Boolean).join(' ')); }
   _hayArr() {
-    const HAY_CACHE_MAX = 80000;
     if (this._hay) return this._hay;
-    if (this.items.length > HAY_CACHE_MAX) return null;
+    if (process.env.HAY_CACHE === '0') return null;
+    // کش کردن متن نرمال‌شده سرعت جست‌وجو را چند برابر می‌کند ولی ۳۵ مگابایت حافظه
+    // می‌خواهد؛ فقط وقتی کش می‌کنیم که سقف heap واقعاً جا داشته باشد.
+    const cost = this.items.length * 220;
+    const hv = require('v8').getHeapStatistics();
+    const free = hv.heap_size_limit - hv.used_heap_size;
+    if (cost > 8 * 1048576 && free < cost * 2) return null;
     return (this._hay = this.items.map((_, i) => this._hayText(i)));
   }
   candIdx({ cat, sel = {}, q } = {}) {

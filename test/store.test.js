@@ -76,6 +76,16 @@ t.test('Index با آرایهٔ ساده (سازگاری عقب‌رو) همان
   a.equal(ix.offers('p1', { sort: 'price' })[0].offer.price, 500);
 });
 
+t.test('جست‌وجوی متنی با کش متن و بدون آن نتیجهٔ یکسان می‌دهد', () => {
+  const d = L.build(make());
+  const a1 = new Index(d).cands({ q: 'شارژر' }).map(p => p.id).sort();
+  process.env.HAY_CACHE = '0';
+  const a2 = new Index(d).cands({ q: 'شارژر' }).map(p => p.id).sort();
+  delete process.env.HAY_CACHE;
+  a.ok(a1.length > 0);
+  a.deepEqual(a2, a1);
+});
+
 t.test('مسیر کامل build(): دیتاست کوچک با فیلتر پویا و آفِرهای ستونی', () => {
   const d = L.build(make());
   a.equal(d.offers.length, 10);
