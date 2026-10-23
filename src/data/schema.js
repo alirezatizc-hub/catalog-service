@@ -5,7 +5,7 @@ exports.CONFIRMED={
  offers:{id:'offer_id',product:'product_id',shop:'shop_id',price:'price_toman',updated:'last_price_changed_at',description:'description',seller:'seller_title',warranty:'warranty'},
  shops:{id:'shop_id'}};
 // ستون‌های جدول shops تأییدنشده‌اند: فقط «نامزدهای قابل تنظیم» (حدس، نه واقعیت). با data/mapping.json بازنویسی می‌شوند.
-exports.SHOP_CANDIDATES={name:['name'],address:['address'],lat:['lat'],lng:['lon'],hours:['weekly_hours'],phone:['contacts'],whatsapp:['contacts'],bale:['contacts'],installment:['payment_options'],torobpay:['payment_options'],kalabarg:['payment_options'],express:['supports_fast_delivery'],place_desc:['location_label'],instagram:['instagram'],website:['website_url']};
+exports.SHOP_CANDIDATES={name:['name'],address:['address'],lat:['lat'],lng:['lon'],hours:['weekly_hours'],phone:['contacts'],installment:['payment_options'],express:['supports_fast_delivery'],place_desc:['location_label'],instagram:['instagram'],website:['website_url']};
 // کلیدهای specs.key که به فیلترهای اصلی نگاشت می‌شوند (تطبیق دقیق؛ تأییدنشده — بعد از دیدن /api/report تنظیم شود)
 exports.SPEC_ALIASES={color:['رنگ','رنگ بندی','color'],ram:['مقدار رم','رم','ram'],storage:['حافظه داخلی','ظرفیت حافظه داخلی','storage']};
 exports.CORE=[['brand','برند'],['color','رنگ'],['model','مدل'],['ram','رم'],['storage','حافظه']];
