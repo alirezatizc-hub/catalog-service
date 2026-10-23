@@ -1,8 +1,10 @@
 'use strict';
 // OpenAI-compatible chat-completions adapter.
-// OpenAI is the default provider; compatible gateways can override LLM_BASE_URL / LLM_API_URL.
-const baseUrl = () => (process.env.LLM_BASE_URL || process.env.LLM_API_URL || 'https://api.openai.com/v1').replace(/\/+$/, '');
-const enabled = () => Boolean(process.env.LLM_API_KEY);
+// Supports the project's Liara variable names (BOXAPI_*/AI_MODEL) and legacy LLM_* aliases.
+const apiKey = () => process.env.BOXAPI_API_KEY || process.env.LLM_API_KEY;
+const baseUrl = () => (process.env.BOXAPI_BASE_URL || process.env.LLM_BASE_URL || process.env.LLM_API_URL || 'https://api.openai.com/v1').replace(/\/+$/, '');
+const modelName = () => process.env.AI_MODEL || process.env.LLM_MODEL || 'gpt-4o-mini';
+const enabled = () => Boolean(apiKey());
 
 async function understand(ix, message) {
   if (!enabled()) { const e = new Error('LLM not configured'); e.code = 'ai_not_configured'; throw e; }
@@ -13,10 +15,10 @@ async function understand(ix, message) {
   try {
     const res = await fetch(url, {
       method: 'POST',
-      headers: { 'content-type': 'application/json', authorization: 'Bearer ' + process.env.LLM_API_KEY },
+      headers: { 'content-type': 'application/json', authorization: 'Bearer ' + apiKey() },
       signal: controller.signal,
       body: JSON.stringify({
-        model: process.env.LLM_MODEL || 'gpt-4o-mini',
+        model: modelName(),
         temperature: 0,
         max_tokens: 350,
         messages: [
@@ -39,4 +41,4 @@ async function understand(ix, message) {
     clearTimeout(timeout);
   }
 }
-module.exports = { enabled, understand, baseUrl };
+module.exports = { enabled, understand, baseUrl, modelName };
