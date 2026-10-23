@@ -158,7 +158,8 @@ function renderSource() {
   el.hidden = false;
   el.innerHTML = `<span class="tag ${meta.ready ? 'ok' : 'bad'}">${esc(src)}</span>` +
     (meta.ready ? ` <span class="hint">${fa(c.products)} محصول · ${fa(c.shops)} فروشگاه · ${fa(c.offers)} آفِر ثبت‌شده</span>` : ' <span class="hint">در حال خواندن داده از دیتابیس…</span>') +
-    (meta.db === 'postgres' ? ' <span class="tag info">پیگیری‌ها در دیتابیس ذخیره می‌شوند</span>' : meta.ready ? ' <span class="tag warn">پیگیری‌ها موقت‌اند (بدون دیتابیس)</span>' : '');
+    (meta.db === 'postgres' ? ' <span class="tag info">پیگیری‌ها در دیتابیس ذخیره می‌شوند</span>' : meta.ready ? ' <span class="tag warn">پیگیری‌ها موقت‌اند (بدون دیتابیس)</span>' : '') +
+    (meta.ai && meta.aiInfo ? ` <span class="tag info" title="فهم جمله با مدل؛ داده‌ی کاربر به BoxAPI می‌رود">هوش مصنوعی: ${esc(PD(String(meta.aiInfo.model)))}</span>` : '');
 }
 function notReady() {
   const st2 = meta.dataset || {};

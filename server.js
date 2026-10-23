@@ -74,7 +74,7 @@ function doctorPage(d) {
     <p class="hint">زمان بررسی: ${E(new Date(d.at || Date.now()).toLocaleString('fa-IR', { timeZone: 'Asia/Tehran' }))} · منبع: ${E(d.source || '—')} · آماده: ${d.ready ? 'بله' : 'خیر'}</p>
     <ol class="chks">${rows || '<li class="chk">بررسی‌ای اجرا نشد.</li>'}</ol>
     ${steps ? `<h2>قدم بعدی</h2><ul class="warns">${steps}</ul>` : ''}
-    <div class="ch-row"><a class="btn" href="/">بازگشت به اپ</a><a class="btn ghost" href="/api/diagnose">همین گزارش به‌صورت JSON</a><a class="btn ghost" href="/api/status">/api/status</a></div>
+    <div class="ch-row"><a class="btn" href="/">بازگشت به اپ</a><a class="btn ghost" href="/doctor?ai=1">تست اتصال هوش مصنوعی</a><a class="btn ghost" href="/api/diagnose">همین گزارش به‌صورت JSON</a><a class="btn ghost" href="/api/status">/api/status</a></div>
     <p class="hint">هیچ رمز یا رشته‌ی اتصالی در این صفحه نمایش داده نمی‌شود؛ فقط نام متغیرها و نتیجه‌ی بررسی‌ها.</p>
   </main></body></html>`;
 }
@@ -156,7 +156,7 @@ function createServer(initialData, opts = {}) {
       counts: state.data ? { products: state.ix.P.size, shops: state.ix.S.size, offers: state.data.offers.length } : { products: 0, shops: 0, offers: 0 },
       statuses: STATUSES, topics: TOPICS, channels: CHANNELS,
       map: m, mapProvider: m.provider, routing: m.routing,
-      ai: llm.enabled(), db: state.store.kind,
+      ai: llm.enabled(), aiInfo: llm.info(), db: state.store.kind,
       dataOk: !!(state.data && state.data.report && state.data.report.ok),
       report: state.data ? state.data.report : null,
       dataset: state.dbInfo || null,
@@ -198,10 +198,20 @@ function createServer(initialData, opts = {}) {
       const allowed = !want || got === want;
       if (!allowed) return send(r, 403, { error: 'forbidden', hint: 'برای دیدن این گزارش ?token=… لازم است (DIAG_TOKEN).' });
       let out;
-      try { out = await diagnose({ pool: state.pool || null, state, env: process.env }); }
+      try { out = await diagnose({ pool: state.pool || null, state, env: process.env, probeAi: g('ai') === '1' || g('probe') === '1' }); }
       catch (e) { out = { ok: false, checks: [], error: db.scrub(e.message), nextSteps: ['خطای غیرمنتظره در عیب‌یابی؛ لاگ اپ را ببینید.'] }; }
       if (p === '/doctor') return htmlOut(r, 200, doctorPage(out));
       return send(r, 200, out);
+    }
+    if (p === '/api/ai') {
+      const info = llm.info();
+      return send(r, 200, { ...info, hint: info.enabled ? null : llm.hintFor({ code: 'ai_not_configured' }) });
+    }
+    if (p === '/api/ai/test') {
+      if (limited(ip, 'aitest', 6)) return send(r, 429, { error: 'rate_limited' });
+      if (!llm.enabled()) return send(r, 503, { ok: false, error: 'ai_not_configured', hint: llm.hintFor({ code: 'ai_not_configured' }), ...llm.info() });
+      const out = await llm.probe();
+      return send(r, out.ok ? 200 : 502, { ...llm.info(), ...out });
     }
     if (p.startsWith('/api/') && !state.ix) {
       if (['/api/health', '/api/status', '/api/meta'].includes(p)) return;

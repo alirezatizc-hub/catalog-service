@@ -3,6 +3,7 @@
 // همان بررسی‌های scripts/doctor.js، ولی از داخل خود اپ و بدون دسترسی به کنسول لیارا.
 // هیچ رمز/رشته‌ی اتصالی برنمی‌گرداند؛ فقط نام متغیرها و نتیجه‌ی بررسی‌ها.
 const db = require('./db');
+const llm = require('./llm');
 
 const ID_ALIASES = { products: ['product_id', 'source_id', 'id'], shops: ['shop_id', 'source_id', 'id'], offers: ['offer_id', 'source_id', 'id'] };
 
@@ -15,7 +16,7 @@ async function countRows(pool, table) {
 /**
  * @param {{ pool?: any, state?: any, env?: NodeJS.ProcessEnv }} opts
  */
-async function diagnose({ pool = null, state = null, env = process.env } = {}) {
+async function diagnose({ pool = null, state = null, env = process.env, probeAi = false } = {}) {
   const checks = [];
   const add = (id, label, status, detail, hint) => checks.push({ id, label, status, detail: detail || null, hint: hint || null });
   const out = { at: new Date().toISOString(), ok: false, source: state ? state.source : null, ready: !!(state && state.ready), checks, nextSteps: [] };
@@ -120,7 +121,21 @@ async function diagnose({ pool = null, state = null, env = process.env } = {}) {
     } catch (e) { add('store', 'جدول‌های پیگیری', 'fail', db.scrub(e.message)); }
   }
 
-  /* ۶) وضعیت بارگذاری در حافظه */
+  /* ۶) هوش مصنوعی (BoxAPI) */
+  const ai = llm.info();
+  if (!ai.enabled) {
+    add('ai', 'هوش مصنوعی (BoxAPI)', 'warn', `کلید تنظیم نشده؛ مدل پیش‌فرض ${ai.model} روی ${ai.host}`,
+      'اختیاری: BOXAPI_API_KEY را در پنل لیارا بگذارید تا فهم جمله با مدل انجام شود؛ بدون آن، قواعد محلی جواب می‌دهند.');
+  } else {
+    add('ai', 'هوش مصنوعی (BoxAPI)', 'pass', `آماده · مدل ${ai.model} · ${ai.endpoint}`);
+    if (probeAi) {
+      const pr = await llm.probe();
+      add('ai_probe', 'اتصال واقعی به مدل', pr.ok ? 'pass' : 'fail', `مدل ${pr.model} · ${pr.ms}ms` + (pr.ok ? ` · نمونه: ${String(pr.sample || '').slice(0, 40)}` : ` · ${pr.code}`), pr.ok ? null : pr.hint || pr.error);
+      if (!pr.ok) out.nextSteps.push('اتصال AI را بررسی کنید: مقدار BOXAPI_API_KEY، مسیر ' + ai.endpoint + ' و نام مدل ' + ai.model);
+    }
+  }
+
+  /* ۷) وضعیت بارگذاری در حافظه */
   if (state) {
     const c = state.data ? state.data.report.counts : null;
     if (state.ready) add('load', 'بارگذاری در حافظه', 'pass', `منبع ${state.source} · ${c ? `${c.products} محصول / ${c.shops} فروشگاه / ${c.offers} آفِر` : ''} · ${state.loadedAt ? Math.round((Date.now() - state.loadedAt) / 1000) + ' ثانیه قبل' : ''}`);
