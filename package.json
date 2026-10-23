@@ -1,1 +1,24 @@
-{"name":"torob-assistant","version":"3.0.0","scripts":{"start":"node server.js","test":"node --test test/*.test.js","import:pg":"node src/import-pg.js","test:e2e":"E2E_EXPECTED=54 python3 test/e2e/e2e.py","test:mutations":"python3 test/e2e/mutations.py","bench":"node --expose-gc scripts/bench.js"},"dependencies":{"pg":"^8.13.0"},"engines":{"node":">=18"}}
+{
+  "name": "torob-assistant",
+  "version": "3.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test test/*.test.js",
+    "import:pg": "node src/import-pg.js",
+    "test:e2e": "E2E_EXPECTED=54 python3 test/e2e/e2e.py",
+    "test:mutations": "python3 test/e2e/mutations.py",
+    "bench": "node --expose-gc scripts/bench.js",
+    "deploy:worker": "wrangler deploy"
+  },
+  "dependencies": {
+    "pg": "^8.13.0"
+  },
+  "devDependencies": {
+    "wrangler": "^4.152.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
