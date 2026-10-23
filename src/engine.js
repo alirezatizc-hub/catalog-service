@@ -31,9 +31,12 @@ class Index{
   for(const i of idx){const v=this.items[i][key];if(v==null||v===''){missing++;continue}m.set(v,(m.get(v)||0)+this.nShops[i])}
   const r={total:idx.length,missing,options:[...m].map(([v,n])=>({v,n})).sort((a,b)=>b.n-a.n)};if(this._opt.size>500)this._opt.clear();this._opt.set(ck,r);return r}
  offers(pid,o={}){const tn=tehranNow(o.now||new Date());let out=[];for(const of of this.byP.get(pid)||[]){const s=this.S.get(of.shop),d=valid(o.loc)&&valid(s)?hav(o.loc,s):null,hs=hoursStatus(s,o.now,tn);
-  if(o.rad&&d!=null&&d>o.rad)continue;if(o.inst&&s.installment!==true)continue;if(o.min&&of.price<o.min)continue;if(o.max&&of.price>o.max)continue;if(o.open&&hs.state!=='open')continue;out.push({shop:s,offer:of,km:d,hours:hs})}
+  if(o.rad&&d!=null&&d>o.rad)continue;if(o.inst&&s.installment!==true)continue;if(o.torobpay&&s.torobpay!==true)continue;if(o.kalabarg&&s.kalabarg!==true)continue;if(o.express&&s.express!==true)continue;if(o.min&&of.price<o.min)continue;if(o.max&&of.price>o.max)continue;if(o.open&&hs.state!=='open')continue;out.push({shop:s,offer:of,km:d,hours:hs})}
   const min=Math.min(...out.map(r=>r.offer.price));out.forEach(r=>{r.score=+(r.offer.price/min+0.03*(r.km||0)).toFixed(3)});
   const key={price:r=>r.offer.price,dist:r=>r.km??1e9,smart:r=>r.score}[o.sort]||(r=>r.offer.price);return out.sort((a,b)=>key(a)-key(b))}
+ // فروشگاه‌های جایگزین برای همان محصول (وقتی فروشگاه انتخابی بسته/بی‌پاسخ است): اول بازها، بعد امتیاز ترکیبی
+ backups(pid,shopId,o={}){const rows=this.offers(pid,{...o,rad:o.rad?o.rad*1.5:undefined,sort:'smart'}).filter(r=>r.shop.id!==shopId);return rows.filter(r=>r.hours.state==='open').concat(rows.filter(r=>r.hours.state!=='open')).slice(0,3)}
+ priceRange(pid){const os=this.byP.get(pid)||[];if(!os.length)return{minPrice:null,maxPrice:null,shops:0};let lo=Infinity,hi=0;for(const o of os){if(o.price<lo)lo=o.price;if(o.price>hi)hi=o.price}return{minPrice:lo,maxPrice:hi,shops:this.shopCount(pid)}}
  alternatives(pid,o){const p=this.P.get(pid),r=[];if(!p)return r;const sel={};if(p.brand!=null)sel.brand=p.brand;if(p.model!=null)sel.model=p.model;
   for(const i of this.candIdx({cat:p.cat,sel})){const q=this.items[i];if(q.id===pid||q.brand!==p.brand||q.model!==p.model)continue;const diff=['color','ram','storage','size'].filter(k=>q[k]!==p[k]);if(diff.length!==1)continue;const rows=this.offers(q.id,o);if(rows.length)r.push({product:q,diff,best:rows[0]})}return r.slice(0,6)}
 }
