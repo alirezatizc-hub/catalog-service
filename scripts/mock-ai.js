@@ -17,8 +17,16 @@ function answer(text) {
   const brands = ['سامسونگ', 'اپل', 'شیائومی', 'انکر', 'سونی', 'لنوو', 'ایسوس', 'جی‌بل'];
   const brand = brands.find(b => t.includes(b));
   if (brand) out.sel.brand = brand;
-  const nums = t.replace(/[۰-۹]/g, d => '۰۱۲۳۴۵۶۷۸۹'.indexOf(d)).match(/(\d[\d,]{2,})/);
-  if (nums) out.filters.max = Number(nums[1].replace(/,/g, ''));
+  // «۵۰۰ هزار» → 500000 ، «دو میلیون» → 2000000 (همان قاعده‌ای که در پرامپت خواسته شده)
+  const WORDS = { 'یک': 1, 'دو': 2, 'سه': 3, 'چهار': 4, 'پنج': 5, 'شش': 6, 'هفت': 7, 'هشت': 8, 'نه': 9, 'ده': 10, 'نیم': 0.5 };
+  let ascii = t.replace(/[۰-۹]/g, d => '۰۱۲۳۴۵۶۷۸۹'.indexOf(d)).replace(/٫/g, '.');
+  ascii = ascii.replace(/(یک|دو|سه|چهار|پنج|شش|هفت|هشت|نه|ده|نیم)\s*(هزار|میلیون|میلیارد)/g, (_, w, u) => (WORDS[w] || 1) + u);
+  const m = ascii.match(/(\d[\d,.]*)\s*(هزار|میلیون|میلیارد)?/);
+  if (m) {
+    const base = Number(m[1].replace(/[,]/g, ''));
+    const mul = { 'هزار': 1e3, 'میلیون': 1e6, 'میلیارد': 1e9 }[m[2]] || 1;
+    if (Number.isFinite(base) && base * mul >= 1000) out.filters.max = Math.round(base * mul);
+  }
   if (/باز|الان/.test(t)) out.filters.open = true;
   if (!out.cat && /سلام|درود|چطوری|خوبی/.test(t)) out.reply = 'سلام! بگو دنبال چه محصولی هستی تا نزدیک‌ترین و ارزان‌ترین فروشگاه تهران را پیدا کنم.';
   return out;

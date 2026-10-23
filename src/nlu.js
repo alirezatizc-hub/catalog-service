@@ -114,7 +114,8 @@ function sanitize(ix, raw) {
 function merge(ai, rules) {
   const cat = ai.cat || rules.cat;
   const sel = ai.cat === cat ? { ...rules.sel, ...ai.sel } : { ...rules.sel };
-  return { cat, sel: cat ? sel : {}, filters: { ...rules.filters, ...ai.filters }, reply: ai.reply, source: ai.cat || Object.keys(ai.filters).length ? 'llm' : 'rules' };
+  // اگر مدل فقط پاسخ متنی داده باشد هم منبع «llm» است تا در رابط با نشان هوش مصنوعی نمایش داده شود
+  return { cat, sel: cat ? sel : {}, filters: { ...rules.filters, ...ai.filters }, reply: ai.reply, source: ai.cat || ai.reply || Object.keys(ai.filters).length ? 'llm' : 'rules' };
 }
 
 module.exports = { interpret, sanitize, merge, priceOf, togglesOf };

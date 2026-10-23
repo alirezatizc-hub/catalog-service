@@ -170,3 +170,16 @@ test('/api/ai/test با سرور ساختگی موفق می‌شود و نمون
     });
   } finally { await srv.close(); }
 });
+
+test('پاسخ متنی مدل (بدون دسته) هم منبع llm می‌گیرد و در رابط با نشان هوش مصنوعی می‌آید', async () => {
+  const nlu = require('../src/nlu');
+  const srv = await mockServer((_, res) => reply(res, '{"cat":null,"sel":{},"filters":{},"reply":"سلام! چه محصولی می‌خواهی؟"}'));
+  try {
+    await withEnv({ BOXAPI_API_KEY: 'k', BOXAPI_BASE_URL: srv.base }, async () => {
+      const ai = await require('../src/llm').understand(null, 'سلام');
+      const merged = nlu.merge({ ...nlu.sanitize({ registry: { cats: {} } }, ai) }, nlu.interpret({ registry: { cats: {} }, options: () => ({ options: [] }), cands: () => [] }, 'سلام'));
+      assert.equal(merged.source, 'llm');
+      assert.match(merged.reply, /سلام/);
+    });
+  } finally { await srv.close(); }
+});
