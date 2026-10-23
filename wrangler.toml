@@ -1,0 +1,10 @@
+name = "catalog-service"
+main = "worker.js"
+compatibility_date = "2026-10-23"
+compatibility_flags = ["nodejs_compat"]
+
+# Migration scaffold only. Add Hyperdrive production and preview bindings
+# after valid resource IDs are created; do not deploy placeholders.
+
+[observability]
+enabled = true
