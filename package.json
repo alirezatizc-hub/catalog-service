@@ -1,22 +1,16 @@
 {
   "name": "torob-assistant",
-  "version": "3.1.0",
+  "version": "4.0.0",
   "private": true,
   "type": "commonjs",
   "scripts": {
     "start": "node server.js",
-    "test": "node --test test/*.test.js",
     "import:pg": "node src/import-pg.js",
-    "test:e2e": "E2E_EXPECTED=54 python3 test/e2e/e2e.py",
-    "test:mutations": "python3 test/e2e/mutations.py",
-    "bench": "node --expose-gc scripts/bench.js",
-    "deploy:worker": "wrangler deploy"
+    "test": "node --test test/*.test.js",
+    "bench": "node --expose-gc scripts/bench.js"
   },
   "dependencies": {
     "pg": "^8.13.0"
-  },
-  "devDependencies": {
-    "wrangler": "^4.152.0"
   },
   "engines": {
     "node": ">=20"

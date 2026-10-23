@@ -1,42 +1,60 @@
 'use strict';
-// اتصال به PostgreSQL (دیتابیس لیارا). فقط وقتی تنظیمات اتصال در محیط باشد فعال می‌شود؛ وگرنه برنامه با فایل/Demo و حافظه کار می‌کند.
-// نام متغیرها: لیارا هنگام اتصال دیتابیس به برنامه متغیرهایی می‌سازد؛ چون نام دقیق آن‌ها در مستندات قابل‌خواندن نبود،
-// چند نام رایج پشتیبانی می‌شود. اگر نام‌های شما فرق دارد فقط همین جدول ENV را اصلاح کنید.
+// اتصال به PostgreSQL (دیتابیس لیارا) + خواندن دیتاست + ذخیره‌ی پرسش‌ها/پیگیری‌ها.
+// مستندات لیارا: URI اتصال در متغیر محیطی قرار می‌گیرد (نمونه‌ی رسمی: PG_URI)؛
+// برای سازگاری، نام‌های رایج دیگر هم پذیرفته می‌شوند. هیچ مقداری در لاگ چاپ نمی‌شود.
 const ENV = {
-  url: ['DATABASE_URL', 'POSTGRES_URL', 'POSTGRESQL_URL', 'PG_URL', 'DB_URL'],
-  host: ['PGHOST', 'POSTGRES_HOST', 'POSTGRESQL_HOST', 'DB_HOST'],
-  port: ['PGPORT', 'POSTGRES_PORT', 'POSTGRESQL_PORT', 'DB_PORT'],
-  user: ['PGUSER', 'POSTGRES_USER', 'POSTGRESQL_USER', 'DB_USER', 'DB_USERNAME'],
-  password: ['PGPASSWORD', 'POSTGRES_PASSWORD', 'POSTGRESQL_PASSWORD', 'DB_PASSWORD'],
-  database: ['PGDATABASE', 'POSTGRES_DB', 'POSTGRES_DATABASE', 'POSTGRESQL_DB', 'DB_NAME', 'DB_DATABASE'],
-  ssl: ['PGSSLMODE', 'DB_SSL', 'POSTGRES_SSL']
+  url: ['DATABASE_URL', 'PG_URI', 'POSTGRES_URI', 'POSTGRESQL_URI', 'PG_URL', 'DB_URI', 'DB_URL'],
+  host: ['PGHOST', 'DB_HOST', 'POSTGRES_HOST', 'POSTGRESQL_HOST'],
+  port: ['PGPORT', 'DB_PORT', 'POSTGRES_PORT', 'POSTGRESQL_PORT'],
+  user: ['PGUSER', 'DB_USER', 'DB_USERNAME', 'POSTGRES_USER', 'POSTGRESQL_USER'],
+  password: ['PGPASSWORD', 'DB_PASS', 'DB_PASSWORD', 'POSTGRES_PASSWORD', 'POSTGRESQL_PASSWORD'],
+  database: ['PGDATABASE', 'DB_NAME', 'DB_DATABASE', 'POSTGRES_DB', 'POSTGRES_DATABASE'],
+  ssl: ['PGSSLMODE', 'PG_SSL', 'DB_SSL', 'POSTGRES_SSL']
 };
 const pick = (env, names) => { for (const n of names) if (env[n] != null && env[n] !== '') return env[n]; };
-
+const sslOf = (env, url) => {
+  const raw = String(pick(env, ENV.ssl) || (url && /[?&]sslmode=([^&]+)/.exec(url) || [])[1] || '').toLowerCase();
+  if (['require', 'true', '1', 'verify-full', 'verify-ca', 'prefer'].includes(raw)) return { rejectUnauthorized: false };
+  return undefined;
+};
 function config(env = process.env) {
   const url = pick(env, ENV.url);
-  const sslRaw = String(pick(env, ENV.ssl) || '').toLowerCase();
-  const ssl = ['require', 'true', '1', 'verify-full', 'verify-ca'].includes(sslRaw) ? { rejectUnauthorized: false } : undefined;
-  if (url) return { connectionString: url, ssl };
+  if (url) return { connectionString: String(url), ssl: sslOf(env, String(url)) };
   const host = pick(env, ENV.host), database = pick(env, ENV.database);
   if (!host || !database) return null;
-  return { host, port: Number(pick(env, ENV.port)) || 5432, user: pick(env, ENV.user), password: pick(env, ENV.password), database, ssl };
+  return {
+    host, port: Number(pick(env, ENV.port)) || 5432,
+    user: pick(env, ENV.user), password: pick(env, ENV.password), database,
+    ssl: sslOf(env)
+  };
 }
-
+// برای /api/health: کدام نام‌های متغیر در محیط حاضرند (بدون مقدار)
+function envReport(env = process.env) {
+  const out = {};
+  for (const [k, names] of Object.entries(ENV)) out[k] = names.filter(n => env[n] != null && env[n] !== '');
+  return out;
+}
 function createPool(env = process.env) {
   const cfg = config(env);
   if (!cfg) return null;
   let Pool;
   try { ({ Pool } = require('pg')); } catch { throw new Error('پکیج pg نصب نیست؛ `npm install` را اجرا کنید'); }
-  const pool = new Pool({ ...cfg, max: Number(env.PG_POOL_MAX) || 5, connectionTimeoutMillis: 5000, idleTimeoutMillis: 30000 });
+  const pool = new Pool({
+    ...cfg, max: Number(env.PG_POOL_MAX) || 6,
+    connectionTimeoutMillis: Number(env.PG_CONNECT_TIMEOUT_MS) || 8000,
+    idleTimeoutMillis: 30000, keepAlive: true,
+    application_name: 'torob-assistant',
+    statement_timeout: Number(env.PG_STATEMENT_TIMEOUT_MS) || 120000
+  });
   pool.on('error', e => console.error('[pg] idle client error:', e.message));
   return pool;
 }
 
-const PREFIX = (env = process.env) => String(env.PG_TABLE_PREFIX || 'catalog_').replace(/[^a-z0-9_]/gi, '');
 const TABLES = ['products', 'offers', 'shops'];
 const qi = s => '"' + String(s).replace(/"/g, '""') + '"';
+const PREFIX = (env = process.env) => String(env.PG_TABLE_PREFIX || '').replace(/[^a-z0-9_]/gi, '');
 
+/* ───────── مهاجرت جداول برنامه ───────── */
 const MIGRATIONS = [
   `CREATE TABLE IF NOT EXISTS inquiries(
     id BIGSERIAL PRIMARY KEY,
@@ -52,136 +70,258 @@ const MIGRATIONS = [
     answer TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now())`,
-  'CREATE INDEX IF NOT EXISTS inquiries_client_idx ON inquiries(client_id, created_at DESC)'
+  'CREATE INDEX IF NOT EXISTS inquiries_client_idx ON inquiries(client_id, created_at DESC)',
+  // درخواست تماس/استعلام: صف کار برای تیم عملیات یا اتصال آینده به سرویس تماس.
+  // هیچ‌وقت خارج از ساعت کاری فروشگاه یا بدون رضایت کاربر ساخته نمی‌شود.
+  `CREATE TABLE IF NOT EXISTS call_requests(
+    id BIGSERIAL PRIMARY KEY,
+    client_id TEXT NOT NULL,
+    shop_id TEXT NOT NULL,
+    product_id TEXT NOT NULL,
+    topic TEXT NOT NULL,
+    question TEXT NOT NULL,
+    phone TEXT,
+    status TEXT NOT NULL DEFAULT 'queued',
+    consent_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    earliest_at TIMESTAMPTZ,
+    sent_at TIMESTAMPTZ,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    answer TEXT,
+    availability TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now())`,
+  'CREATE UNIQUE INDEX IF NOT EXISTS call_requests_daily_idx ON call_requests(client_id, shop_id, product_id, topic, (created_at::date))',
+  `CREATE TABLE IF NOT EXISTS watches(
+    id BIGSERIAL PRIMARY KEY,
+    client_id TEXT NOT NULL,
+    product_id TEXT NOT NULL,
+    shop_id TEXT,
+    target_price BIGINT,
+    lat DOUBLE PRECISION, lng DOUBLE PRECISION, rad DOUBLE PRECISION,
+    active BOOLEAN NOT NULL DEFAULT true,
+    last_state TEXT,
+    notified_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now())`,
+  'CREATE UNIQUE INDEX IF NOT EXISTS watches_unique_idx ON watches(client_id, product_id, COALESCE(shop_id, \'*\'))'
 ];
 async function migrate(pool) { for (const sql of MIGRATIONS) await pool.query(sql); }
 
-// ---- خواندن دیتاست از PostgreSQL به همان شکل {cols, rows} که loader از CSV می‌سازد ----
-async function loadRaw(pool, env = process.env) {
-  const configured = PREFIX(env);
-  // Prefer explicit prefix, but also detect common unprefixed tables when data was imported manually.
-  const prefixes = [...new Set([configured, '', 'torob_', 'torob_assistant_'])];
-  let selected = null;
-  for (const pre of prefixes) {
-    let found = true;
-    for (const t of TABLES) {
-      const ex = await pool.query('SELECT to_regclass($1) AS r', ['public.' + pre + t]);
-      if (!ex.rows[0] || !ex.rows[0].r) { found = false; break; }
-    }
-    if (found) { selected = pre; break; }
+/* ───────── کشف جدول‌های دیتاست ───────── */
+async function tableColumns(pool) {
+  const r = await pool.query(
+    `SELECT table_name, column_name FROM information_schema.columns
+     WHERE table_schema = current_schema() ORDER BY table_name, ordinal_position`);
+  const m = new Map();
+  for (const row of r.rows) {
+    if (!m.has(row.table_name)) m.set(row.table_name, []);
+    m.get(row.table_name).push(row.column_name);
   }
-  if (selected == null) {
-    const listed = await pool.query("SELECT tablename FROM pg_tables WHERE schemaname='public' ORDER BY tablename");
-    console.error('[db] no recognized dataset tables; expected products/offers/shops with prefixes:', prefixes, 'available tables:', listed.rows.map(r => r.tablename));
-    return null;
-  }
-  if (selected !== configured) console.log('[db] detected dataset table prefix:', selected || '(none)');
-  const out = {};
-  for (const t of TABLES) {
-    const name = selected + t;
-    const r = await pool.query('SELECT * FROM ' + qi(name));
-    const cols = r.fields ? r.fields.map(f => f.name) : (r.rows[0] ? Object.keys(r.rows[0]) : []);
-    out[t] = { cols, rows: r.rows.map(row => Object.fromEntries(cols.map(c => [c, cell(row[c])]))) };
-  }
-  return out;
+  return m;
 }
-const cell = v => v == null || v === '' ? null : typeof v === 'object' ? (v instanceof Date ? v.toISOString() : JSON.stringify(v)) : String(v);
+const has = (cols, ...names) => names.every(n => cols.includes(n));
+const anyOf = (cols, ...names) => names.some(n => cols.includes(n));
+// حدس هوشمند جدول هر نقش: اول نام‌های رایج، بعد امضای ستون‌ها
+function detectDatasetTables(map, prefix = '') {
+  const entries = [...map.entries()];
+  const cands = { products: [], offers: [], shops: [] };
+  for (const [t, cols] of entries) {
+    const c = new Set(cols);
+    const id = anyOf(cols, 'product_id', 'source_id');
+    if (id && anyOf(cols, 'persian_title', 'title_fa', 'title', 'name_fa') && anyOf(cols, 'category_name', 'category', 'brand_name', 'model')) cands.products.push({ t, score: /product/i.test(t) ? 2 : 1 });
+    if (anyOf(cols, 'shop_id', 'source_id') && anyOf(cols, 'address', 'address_text') && anyOf(cols, 'lat', 'latitude')) cands.shops.push({ t, score: /shop|store|seller/i.test(t) ? 2 : 1 });
+    if (anyOf(cols, 'offer_id', 'source_id') && has(cols, 'product_id', 'shop_id') && anyOf(cols, 'price_toman', 'price')) cands.offers.push({ t, score: /offer|price|listing/i.test(t) ? 2 : 1 });
+  }
+  const out = {};
+  for (const role of TABLES) {
+    const list = cands[role].sort((a, b) => b.score - a.score || a.t.length - b.t.length);
+    out[role] = list.length ? list[0].t : null;
+  }
+  // ترجیح نام‌های رو‌در‌رو (products/offers/shops) یا با پیشوند تنظیم‌شده
+  for (const role of TABLES) {
+    const preferred = [prefix && prefix + role, role, 'torob_' + role, 'torob_assistant_' + role, 'catalog_' + role].filter(Boolean);
+    const hit = entries.find(([t]) => preferred.some(p => t.toLowerCase() === p.toLowerCase()));
+    if (hit && cands[role].some(x => x.t === hit[0])) out[role] = hit[0];
+  }
+  return { tables: out, candidates: Object.fromEntries(TABLES.map(r => [r, cands[r].map(x => x.t)])), all: entries.map(([t, cols]) => ({ table: t, columns: cols })) };
+}
 
-// ---- ایمپورت یک جدول (همه ستون‌ها TEXT؛ مثل CSV اصلی) ----
+/* ───────── خواندن صفحه‌به‌صفحه در ساختن ایندکس ───────── */
+async function* pageRows(pool, table, cols, idCol, pageSize = 20000) {
+  const list = cols.map(qi).join(',');
+  let last = null;
+  for (;;) {
+    const r = last == null
+      ? await pool.query({ text: `SELECT ${list} FROM ${qi(table)} ORDER BY ${qi(idCol)} LIMIT $1`, values: [pageSize], rowMode: 'array' })
+      : await pool.query({ text: `SELECT ${list} FROM ${qi(table)} WHERE ${qi(idCol)} > $1 ORDER BY ${qi(idCol)} LIMIT $2`, values: [last, pageSize], rowMode: 'array' });
+    if (!r.rows.length) return;
+    last = r.rows[r.rows.length - 1][cols.indexOf(idCol)];
+    for (const arr of r.rows) {
+      const o = {};
+      for (let i = 0; i < cols.length; i++) o[cols[i]] = arr[i] instanceof Date ? arr[i].toISOString() : (arr[i] == null ? null : String(arr[i]));
+      yield o;
+    }
+    if (r.rows.length < pageSize) return;
+  }
+}
+
+/* ───────── ایمپورت CSV/JSON به PostgreSQL ───────── */
+// همه‌ی ستون‌ها TEXT می‌مانند تا دیتاست بدون تبدیل از دست نرود؛ نرمال‌سازی در برنامه انجام می‌شود.
 async function importTable(pool, name, { cols, rows }, { indexes = [] } = {}) {
-  const c = pool.connect ? await pool.connect() : pool;
+  const c = await pool.connect();
+  const staging = name + '_staging';
   try {
     await c.query('BEGIN');
-    // ابتدا داده را در جدول موقتِ staging بارگذاری می‌کنیم؛ جدول قبلی تا پایان بارگذاری دست‌نخورده می‌ماند.
-    const staging = name + '_staging';
     await c.query('DROP TABLE IF EXISTS ' + qi(staging));
     await c.query('CREATE TABLE ' + qi(staging) + '(' + cols.map(x => qi(x) + ' TEXT').join(',') + ')');
-    const per = Math.max(1, Math.floor(60000 / cols.length));
+    const per = Math.max(1, Math.floor(60000 / Math.max(1, cols.length)));
     for (let i = 0; i < rows.length; i += per) {
       const chunk = rows.slice(i, i + per), params = [];
-      const values = chunk.map(r => '(' + cols.map(col => { params.push(r[col] == null ? null : String(r[col])); return '
-  } catch (e) { try { await c.query('ROLLBACK'); } catch { /* ignore */ } throw e; }
-  finally { if (c.release) c.release(); }
-}
-
-// ---- ذخیره‌ی پرسش‌ها / پیگیری‌ها ----
-const PUB = r => ({ id: Number(r.id), client: r.client_id, shop: r.shop_id, product: r.product_id, topic: r.topic, message: r.message, channel: r.channel, status: r.status, reason: r.reason, availability: r.availability, answer: r.answer, created: r.created_at instanceof Date ? r.created_at.toISOString() : r.created_at, updated: r.updated_at instanceof Date ? r.updated_at.toISOString() : r.updated_at });
-
-function memoryStore() {
-  const rows = []; let seq = 0;
-  return {
-    kind: 'memory',
-    async add(x) { const now = new Date().toISOString(); const r = { id: ++seq, client: x.client, shop: x.shop, product: x.product, topic: x.topic, message: x.message || null, channel: x.channel || null, status: x.status, reason: x.reason || null, availability: null, answer: null, created: now, updated: now }; rows.push(r); if (rows.length > 5000) rows.shift(); return { ...r }; },
-    async list(client) { return rows.filter(r => r.client === client).slice(-50).reverse().map(r => ({ ...r })); },
-    async update(id, client, patch) { const r = rows.find(x => x.id === id && x.client === client); if (!r) return null; Object.assign(r, patch, { updated: new Date().toISOString() }); return { ...r }; }
-  };
-}
-
-function pgStore(pool) {
-  const cols = 'id,client_id,shop_id,product_id,topic,message,channel,status,reason,availability,answer,created_at,updated_at';
-  return {
-    kind: 'postgres',
-    async add(x) {
-      const r = await pool.query(`INSERT INTO inquiries(client_id,shop_id,product_id,topic,message,channel,status,reason) VALUES($1,$2,$3,$4,$5,$6,$7,$8) RETURNING ${cols}`,
-        [x.client, x.shop, x.product, x.topic, x.message || null, x.channel || null, x.status, x.reason || null]);
-      return PUB(r.rows[0]);
-    },
-    async list(client) { const r = await pool.query(`SELECT ${cols} FROM inquiries WHERE client_id=$1 ORDER BY created_at DESC LIMIT 50`, [client]); return r.rows.map(PUB); },
-    async update(id, client, patch) {
-      const sets = [], vals = [id, client];
-      for (const [k, v] of Object.entries(patch)) { if (!['status', 'availability', 'answer', 'channel'].includes(k)) continue; vals.push(v); sets.push(k + '=$' + vals.length); }
-      if (!sets.length) return null;
-      const r = await pool.query(`UPDATE inquiries SET ${sets.join(',')}, updated_at=now() WHERE id=$1 AND client_id=$2 RETURNING ${cols}`, vals);
-      return r.rows[0] ? PUB(r.rows[0]) : null;
-    }
-  };
-}
-
-module.exports = { config, createPool, migrate, loadRaw, importTable, memoryStore, pgStore, PREFIX, TABLES, ENV };
- + params.length; }).join(',') + ')').join(',');
+      const values = chunk.map(r => '(' + cols.map(col => { params.push(r[col] == null ? null : String(r[col])); return '$' + params.length; }).join(',') + ')').join(',');
       await c.query('INSERT INTO ' + qi(staging) + '(' + cols.map(qi).join(',') + ') VALUES ' + values, params);
     }
-    // تعویض اتمیک در همان تراکنش؛ در صورت شکست، ROLLBACK جدول قبلی را برمی‌گرداند.
-    await c.query('DROP TABLE IF EXISTS ' + qi(name));
+    const old = name + '_old';
+    await c.query('DROP TABLE IF EXISTS ' + qi(old));
+    await c.query('SELECT to_regclass($1) AS r', ['public.' + name]).then(async res => {
+      if (res.rows[0] && res.rows[0].r) await c.query('ALTER TABLE ' + qi(name) + ' RENAME TO ' + qi(old));
+    });
     await c.query('ALTER TABLE ' + qi(staging) + ' RENAME TO ' + qi(name));
-    for (const col of new Set(indexes)) if (cols.includes(col)) await c.query('CREATE INDEX ' + qi(name + '_' + col + '_idx') + ' ON ' + qi(name) + '(' + qi(col) + ')');
+    await c.query('DROP TABLE IF EXISTS ' + qi(old));
+    for (const idx of indexes) {
+      if (!cols.includes(idx)) continue;
+      const iname = (name + '_' + idx + '_idx').slice(0, 60);
+      await c.query('CREATE INDEX IF NOT EXISTS ' + qi(iname) + ' ON ' + qi(name) + '(' + qi(idx) + ')');
+    }
     await c.query('COMMIT');
     return rows.length;
-  } catch (e) { try { await c.query('ROLLBACK'); } catch { /* ignore */ } throw e; }
-  finally { if (c.release) c.release(); }
+  } catch (e) {
+    try { await c.query('ROLLBACK'); } catch { /* ignore */ }
+    throw e;
+  } finally { c.release(); }
 }
 
-// ---- ذخیره‌ی پرسش‌ها / پیگیری‌ها ----
-const PUB = r => ({ id: Number(r.id), client: r.client_id, shop: r.shop_id, product: r.product_id, topic: r.topic, message: r.message, channel: r.channel, status: r.status, reason: r.reason, availability: r.availability, answer: r.answer, created: r.created_at instanceof Date ? r.created_at.toISOString() : r.created_at, updated: r.updated_at instanceof Date ? r.updated_at.toISOString() : r.updated_at });
+/* ───────── ذخیره‌سازی پرسش/پیگیری/هشدار (PostgreSQL یا حافظه) ───────── */
+const PUB_INQ = r => ({
+  id: Number(r.id), client: r.client_id, shop: r.shop_id, product: r.product_id, topic: r.topic,
+  message: r.message, channel: r.channel, status: r.status, reason: r.reason, availability: r.availability,
+  answer: r.answer, created: iso(r.created_at), updated: iso(r.updated_at)
+});
+const PUB_CALL = r => ({
+  id: Number(r.id), client: r.client_id, shop: r.shop_id, product: r.product_id, topic: r.topic,
+  question: r.question, phone: r.phone, status: r.status, earliest: iso(r.earliest_at), sent: iso(r.sent_at),
+  attempts: r.attempts, answer: r.answer, availability: r.availability, created: iso(r.created_at), updated: iso(r.updated_at)
+});
+const PUB_WATCH = r => ({
+  id: Number(r.id), client: r.client_id, product: r.product_id, shop: r.shop_id, target: r.target_price == null ? null : Number(r.target_price),
+  lat: r.lat == null ? null : Number(r.lat), lng: r.lng == null ? null : Number(r.lng), rad: r.rad == null ? null : Number(r.rad),
+  active: r.active, last: r.last_state, notified: iso(r.notified_at), created: iso(r.created_at)
+});
+const iso = v => v == null ? null : v instanceof Date ? v.toISOString() : String(v);
+const nowISO = () => new Date().toISOString();
 
 function memoryStore() {
-  const rows = []; let seq = 0;
+  const inq = [], calls = [], watches = [];
+  let i1 = 0, c1 = 0, w1 = 0;
   return {
     kind: 'memory',
-    async add(x) { const now = new Date().toISOString(); const r = { id: ++seq, client: x.client, shop: x.shop, product: x.product, topic: x.topic, message: x.message || null, channel: x.channel || null, status: x.status, reason: x.reason || null, availability: null, answer: null, created: now, updated: now }; rows.push(r); if (rows.length > 5000) rows.shift(); return { ...r }; },
-    async list(client) { return rows.filter(r => r.client === client).slice(-50).reverse().map(r => ({ ...r })); },
-    async update(id, client, patch) { const r = rows.find(x => x.id === id && x.client === client); if (!r) return null; Object.assign(r, patch, { updated: new Date().toISOString() }); return { ...r }; }
-  };
-}
-
-function pgStore(pool) {
-  const cols = 'id,client_id,shop_id,product_id,topic,message,channel,status,reason,availability,answer,created_at,updated_at';
-  return {
-    kind: 'postgres',
-    async add(x) {
-      const r = await pool.query(`INSERT INTO inquiries(client_id,shop_id,product_id,topic,message,channel,status,reason) VALUES($1,$2,$3,$4,$5,$6,$7,$8) RETURNING ${cols}`,
-        [x.client, x.shop, x.product, x.topic, x.message || null, x.channel || null, x.status, x.reason || null]);
-      return PUB(r.rows[0]);
+    inquiries: {
+      async add(x) { const n = nowISO(); const r = { id: ++i1, client: x.client, shop: x.shop, product: x.product, topic: x.topic, message: x.message || null, channel: x.channel || null, status: x.status, reason: x.reason || null, availability: null, answer: null, created: n, updated: n }; inq.push(r); if (inq.length > 5000) inq.shift(); return { ...r }; },
+      async list(client) { return inq.filter(r => r.client === client).slice(-80).reverse().map(r => ({ ...r })); },
+      async update(id, client, patch) { const r = inq.find(x => x.id === id && x.client === client); if (!r) return null; Object.assign(r, patch, { updated: nowISO() }); return { ...r }; }
     },
-    async list(client) { const r = await pool.query(`SELECT ${cols} FROM inquiries WHERE client_id=$1 ORDER BY created_at DESC LIMIT 50`, [client]); return r.rows.map(PUB); },
-    async update(id, client, patch) {
-      const sets = [], vals = [id, client];
-      for (const [k, v] of Object.entries(patch)) { if (!['status', 'availability', 'answer', 'channel'].includes(k)) continue; vals.push(v); sets.push(k + '=$' + vals.length); }
-      if (!sets.length) return null;
-      const r = await pool.query(`UPDATE inquiries SET ${sets.join(',')}, updated_at=now() WHERE id=$1 AND client_id=$2 RETURNING ${cols}`, vals);
-      return r.rows[0] ? PUB(r.rows[0]) : null;
+    calls: {
+      async add(x) { const n = nowISO(); const r = { id: ++c1, client: x.client, shop: x.shop, product: x.product, topic: x.topic, question: x.question, phone: x.phone || null, status: 'queued', earliest: x.earliest || null, sent: null, attempts: 0, answer: null, availability: null, created: n, updated: n }; calls.push(r); if (calls.length > 2000) calls.shift(); return { ...r }; },
+      async list(client) { return calls.filter(r => r.client === client).slice(-80).reverse().map(r => ({ ...r })); },
+      async update(id, client, patch) { const r = calls.find(x => x.id === id && x.client === client); if (!r) return null; Object.assign(r, patch, { updated: nowISO() }); return { ...r }; }
+    },
+    watches: {
+      async add(x) {
+        const dup = watches.find(w => w.client === x.client && w.product === x.product && (w.shop || null) === (x.shop || null));
+        if (dup) { Object.assign(dup, { target: x.target ?? dup.target, rad: x.rad ?? dup.rad, lat: x.lat ?? dup.lat, lng: x.lng ?? dup.lng, active: true, updated: nowISO() }); return { ...dup }; }
+        const r = { id: ++w1, client: x.client, product: x.product, shop: x.shop || null, target: x.target ?? null, lat: x.lat ?? null, lng: x.lng ?? null, rad: x.rad ?? null, active: true, last: null, notified: null, created: nowISO() };
+        watches.push(r); return { ...r };
+      },
+      async list(client) { return watches.filter(w => w.client === client).map(w => ({ ...w })); },
+      async remove(id, client) { const i = watches.findIndex(w => w.id === id && w.client === client); return i >= 0 ? watches.splice(i, 1).length > 0 : false; },
+      async touch(id, state) { const w = watches.find(x => x.id === id); if (w) { w.last = state; w.notified = nowISO(); } }
     }
   };
 }
 
-module.exports = { config, createPool, migrate, loadRaw, importTable, memoryStore, pgStore, PREFIX, TABLES, ENV };
+function pgStore(pool) {
+  const inqCols = 'id,client_id,shop_id,product_id,topic,message,channel,status,reason,availability,answer,created_at,updated_at';
+  const callCols = 'id,client_id,shop_id,product_id,topic,question,phone,status,earliest_at,sent_at,attempts,answer,availability,created_at,updated_at';
+  const watchCols = 'id,client_id,product_id,shop_id,target_price,lat,lng,rad,active,last_state,notified_at,created_at';
+  return {
+    kind: 'postgres',
+    inquiries: {
+      async add(x) {
+        const r = await pool.query(`INSERT INTO inquiries(client_id,shop_id,product_id,topic,message,channel,status,reason) VALUES($1,$2,$3,$4,$5,$6,$7,$8) RETURNING ${inqCols}`,
+          [x.client, x.shop, x.product, x.topic, x.message || null, x.channel || null, x.status, x.reason || null]);
+        return PUB_INQ(r.rows[0]);
+      },
+      async list(client) { const r = await pool.query(`SELECT ${inqCols} FROM inquiries WHERE client_id=$1 ORDER BY created_at DESC LIMIT 80`, [client]); return r.rows.map(PUB_INQ); },
+      async update(id, client, patch) {
+        const sets = [], vals = [id, client];
+        for (const [k, v] of Object.entries(patch)) { if (!['status', 'availability', 'answer', 'channel'].includes(k)) continue; vals.push(v); sets.push(k + '=$' + vals.length); }
+        if (!sets.length) return null;
+        const r = await pool.query(`UPDATE inquiries SET ${sets.join(',')}, updated_at=now() WHERE id=$1 AND client_id=$2 RETURNING ${inqCols}`, vals);
+        return r.rows[0] ? PUB_INQ(r.rows[0]) : null;
+      }
+    },
+    calls: {
+      async add(x) {
+        const r = await pool.query(`INSERT INTO call_requests(client_id,shop_id,product_id,topic,question,phone,status,earliest_at) VALUES($1,$2,$3,$4,$5,$6,'queued',$7)
+          ON CONFLICT (client_id, shop_id, product_id, topic, (created_at::date)) DO UPDATE SET question=EXCLUDED.question, earliest_at=EXCLUDED.earliest_at, updated_at=now()
+          RETURNING ${callCols}`, [x.client, x.shop, x.product, x.topic, x.question, x.phone || null, x.earliest || null]);
+        return PUB_CALL(r.rows[0]);
+      },
+      async list(client) { const r = await pool.query(`SELECT ${callCols} FROM call_requests WHERE client_id=$1 ORDER BY created_at DESC LIMIT 80`, [client]); return r.rows.map(PUB_CALL); },
+      async update(id, client, patch) {
+        const sets = [], vals = [id, client];
+        for (const [k, v] of Object.entries(patch)) {
+          if (!['status', 'answer', 'availability'].includes(k)) continue;
+          vals.push(k === 'status' ? v : v); sets.push(k + '=$' + vals.length);
+        }
+        if (patch.status === 'sent') { vals.push(new Date().toISOString()); sets.push('sent_at=$' + vals.length); sets.push('attempts=attempts+1'); }
+        if (!sets.length) return null;
+        const r = await pool.query(`UPDATE call_requests SET ${sets.join(',')}, updated_at=now() WHERE id=$1 AND client_id=$2 RETURNING ${callCols}`, vals);
+        return r.rows[0] ? PUB_CALL(r.rows[0]) : null;
+      }
+    },
+    watches: {
+      async add(x) {
+        const r = await pool.query(`INSERT INTO watches(client_id,product_id,shop_id,target_price,lat,lng,rad,active)
+          VALUES($1,$2,$3,$4,$5,$6,$7,true)
+          ON CONFLICT (client_id, product_id, COALESCE(shop_id, '*')) DO UPDATE SET target_price=COALESCE(EXCLUDED.target_price, watches.target_price),
+            lat=COALESCE(EXCLUDED.lat, watches.lat), lng=COALESCE(EXCLUDED.lng, watches.lng), rad=COALESCE(EXCLUDED.rad, watches.rad), active=true, updated_at=now()
+          RETURNING ${watchCols}`, [x.client, x.product, x.shop || null, x.target ?? null, x.lat ?? null, x.lng ?? null, x.rad ?? null]);
+        return PUB_WATCH(r.rows[0]);
+      },
+      async list(client) { const r = await pool.query(`SELECT ${watchCols} FROM watches WHERE client_id=$1 ORDER BY created_at DESC LIMIT 100`, [client]); return r.rows.map(PUB_WATCH); },
+      async remove(id, client) { const r = await pool.query('DELETE FROM watches WHERE id=$1 AND client_id=$2', [id, client]); return r.rowCount > 0; },
+      async touch(id, state) { await pool.query('UPDATE watches SET last_state=$2, notified_at=now(), updated_at=now() WHERE id=$1', [id, state]); }
+    }
+  };
+}
+const createStore = pool => pool ? pgStore(pool) : memoryStore();
+
+/* ───────── سلامت اتصال ───────── */
+async function health(pool) {
+  const base = { configured: !!pool, connected: false, env: envReport(), error: null };
+  if (!pool) { base.error = 'no_database_config'; return base; }
+  try {
+    const r = await pool.query('SELECT version() AS v, current_database() AS db');
+    base.connected = true;
+    base.version = String(r.rows[0].v).split(' ').slice(0, 2).join(' ');
+    base.database = r.rows[0].db;
+  } catch (e) {
+    base.error = e.code || e.message;
+  }
+  return base;
+}
+
+module.exports = {
+  config, createPool, migrate, importTable, memoryStore, pgStore, createStore, health,
+  tableColumns, detectDatasetTables, pageRows, envReport, TABLES, PREFIX, ENV
+};

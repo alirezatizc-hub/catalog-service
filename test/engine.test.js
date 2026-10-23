@@ -1,4 +1,4 @@
-const t=require('node:test'),a=require('node:assert');const{Index,hav,hoursStatus}=require('../src/engine'),{build}=require('../src/data/loader'),demo=build(require('../src/demo'),{demo:true});const ix=new Index(demo);
+const t=require('node:test'),a=require('node:assert');const{Index,hav,hoursStatus}=require('../src/engine'),{build}=require('../src/data/loader'),demo=build(require('./fixture-mini'));const ix=new Index(demo);
 t.test('گزینه‌های برند واقعاً از داده',()=>{const o=ix.options({cat:'گوشی موبایل'},'brand').options.map(x=>x.v);a.ok(o.includes('سامسونگ')&&o.includes('اپل'));a.ok(!o.includes('نایک'))});
 t.test('ترکیب AND رنگ+مدل+رم+حافظه',()=>{const c=ix.cands({cat:'گوشی موبایل',sel:{brand:'سامسونگ',color:'آبی',model:'گلکسی S24',ram:'8 گیگابایت',storage:'256 گیگابایت'}});a.equal(c.length,1);a.equal(c[0].color,'آبی')});
 t.test('مقایسه چند فروشگاه برای یک محصول',()=>{const pid=[...ix.byP.entries()].find(([,v])=>v.length>1)[0];const r=ix.offers(pid,{sort:'price'});a.ok(r.length>1&&r[0].offer.price<=r[1].offer.price)});

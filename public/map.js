@@ -15,7 +15,7 @@
     tiles.on('tileerror', () => { bad++; if (!warned && ok === 0 && bad >= 4) { warned = true; cb.onTilesFail && cb.onTilesFail(); } });
     tiles.addTo(map);
 
-    const shopLayer = L.layerGroup().addTo(map), routeLayer = L.layerGroup().addTo(map);
+    const shopLayer = L.layerGroup().addTo(map), routeLayer = L.layerGroup().addTo(map), hubLayer = L.layerGroup().addTo(map);
     let me = null, circle = null, pickMode = false, markers = new Map();
 
     map.on('click', e => { if (pickMode && cb.onPick) { cb.onPick({ lat: e.latlng.lat, lng: e.latlng.lng }); } });
@@ -37,11 +37,24 @@
       setShops(list, selId) {
         shopLayer.clearLayers(); markers = new Map();
         for (const s of list.slice(0, 150)) {
-          const icon = L.divIcon({ className: 'pin' + (s.id === selId ? ' sel' : '') + (s.closed ? ' closed' : ''), html: '<span>' + esc(s.label) + '</span>', iconSize: [30, 30], iconAnchor: [15, 15] });
+          const st = s.state || (s.closed ? 'closed' : 'open'); // حالت باز/بسته/نامشخص از فیلد hours.state می‌آید
+          const icon = L.divIcon({ className: 'pin' + (s.id === selId ? ' sel' : '') + (st === 'closed' ? ' closed' : st === 'unknown' ? ' unk' : ''), html: '<span>' + esc(s.label) + '</span>', iconSize: [30, 30], iconAnchor: [15, 15] });
           const m = L.marker([s.lat, s.lng], { icon, title: s.title, keyboard: true, zIndexOffset: s.id === selId ? 900 : 0, riseOnHover: true });
           m.bindTooltip(esc(s.tip), { direction: 'top', offset: [0, -14], permanent: s.id === selId });
           m.on('click', () => cb.onSelect && cb.onSelect(s.id));
           m.addTo(shopLayer); markers.set(s.id, m);
+        }
+      },
+      setHubs(list) {
+        hubLayer.clearLayers();
+        for (const h of (list || []).slice(0, 12)) {
+          if (!Number.isFinite(h.lat) || !Number.isFinite(h.lng)) continue;
+          const m = L.marker([h.lat, h.lng], {
+            icon: L.divIcon({ className: 'hub-pin', html: '<span>' + esc(h.shops || '•') + '</span>', iconSize: [34, 26], iconAnchor: [17, 13] }),
+            title: 'پاساژ ' + (h.name || ''), keyboard: true, zIndexOffset: 600
+          });
+          m.bindTooltip(esc('پاساژ ' + (h.name || '') + (h.km != null ? ' · ' + h.km + ' کیلومتر' : '')), { direction: 'top', offset: [0, -12] });
+          m.addTo(hubLayer);
         }
       },
       setRoute(r) {

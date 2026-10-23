@@ -1,29 +1,55 @@
-# Torob Assistant v3 — دستیار هوشمند خرید حضوری
-اجرا: `npm install && npm start` → http://localhost:3000 | تست: `npm test`
+# دیتاست ترب در PostgreSQL (لیارا)
 
-## معماری
-- `server.js` API + فایل‌های استاتیک (gzip، CSP) · راه‌اندازی: PostgreSQL → `data/*.csv|json` → Demo
-- `src/db.js` اتصال PostgreSQL (لیارا)، مهاجرت، ایمپورت/خواندن دیتاست، ذخیره‌ی پرسش‌ها · `scripts/import-pg.js`
-- `src/llm.js` هوش مصنوعی **boxapi.ir** (`https://ai.boxapi.ir/ai/v1/chat/completions`) · `src/nlu.js` فهم جمله (قاعده‌محور + اعتبارسنجی خروجی مدل با داده‌ی واقعی)
-- `src/geo.js` تنظیم نقشه و مسیریابی (Neshan، اختیاری) · `src/insight.js` خلاصه‌ی تصمیم‌یار
-- `src/engine.js` جست‌وجو/فیلتر/فاصله/ساعت کاری/جایگزین · `src/data/*` نگاشت و بارگذاری دیتاست
-- `public/` رابط RTL ریسپانسیو (فونت وزیرمتن و Leaflet محلی، بدون CDN)
+داده‌ی نمایش‌داده‌شده در اپ **همیشه** از دیتابیس (یا فایل واقعی در `DATA_DIR`) می‌آید. هیچ دیتای نمونه‌ای در محصول وجود ندارد؛ فیکسچرهای تست فقط زیر `test/` هستند و در استقرار استفاده نمی‌شوند.
 
-## متغیرهای محیطی (روی لیارا)
-| کاربرد | نام‌های پشتیبانی‌شده |
-|---|---|
-| PostgreSQL | `DATABASE_URL` یا `PGHOST/PGPORT/PGUSER/PGPASSWORD/PGDATABASE` (یا `POSTGRES_*` / `DB_HOST`…`DB_DATABASE`)؛ `PGSSLMODE=require` در صورت نیاز؛ `PG_TABLE_PREFIX` (پیش‌فرض `catalog_`) |
-| boxapi AI | `BOXAPI_API_KEY` (یا `BOXAPI_KEY` / `LLM_API_KEY`)؛ اختیاری: `BOXAPI_MODEL` (پیش‌فرض `gpt-5.4-mini`)، `BOXAPI_AI_URL` |
-| مسیریابی نشان | `NESHAN_SERVICE_KEY` (اختیاری؛ بدون آن «خط مستقیم») |
-| نقشه | `MAP_TILE_URL`, `MAP_TILE_ATTRIBUTION` (پیش‌فرض OpenStreetMap) |
+## ۱) جدول‌های موردنیاز
 
-نام‌ها در بالای `src/db.js` / `src/llm.js` / `src/geo.js` هستند و راحت تغییر می‌کنند.
+| نقش | نام پیش‌فرض | ستون‌های شناخته‌شده |
+|---|---|---|
+| محصول | `products` | `product_id, persian_title, brand_name, category_name, model, specs, image_urls` |
+| فروشگاه | `shops` | `shop_id, name, address, category_names, contacts, instagram, lat, location_label, lon, payment_options, supports_fast_delivery, website_url, weekly_hours` |
+| آفِر | `offers` | `offer_id, product_id, shop_id, price_toman, last_price_changed_at, seller_title, description, warranty` |
 
-## دیتاست در PostgreSQL
-`products/offers/shops` (csv/json) را در `data/` بگذارید و یک‌بار `npm run import:pg` بزنید؛ از آن پس سرور دیتاست را از دیتابیس می‌خواند. پرسش‌ها و پیگیری‌ها در جدول `inquiries` ذخیره می‌شوند (بدون PostgreSQL در حافظه).
+- پیشوند جدول‌ها را با `PG_TABLE_PREFIX` تغییر دهید (مثلاً `catalog_`).
+- اگر نام جدول‌ها فرق دارد، سرور با `detectDatasetTables` هم‌معنی‌ها را پیدا می‌کند؛ نتیجه در `GET /api/status` دیده می‌شود.
+- نام ستون‌های دیگر را در `data/mapping.json` (یا `SHOPS`/`CONFIRMED` در `src/data/schema.js`) بنویسید؛ گزارش ناسازگاری در `/api/status` می‌آید.
 
-## API تازه
-`GET /api/interpret?q=` · `POST /api/chat {message}` (AI؛ بدون کلید ۵۰۳) · `GET /api/route` · `POST /api/inquiry` · `POST /api/inquiry/update` · `GET /api/inquiries?client=` · `/api/offers` با `tp/kb/ex` و `insight`.
+قالب `mapping.json`:
 
-## نکته
-تست‌های `test/e2e/*.py` برای رابط قدیمی بودند و با رابط جدید سازگار نیستند؛ بازنویسی یا حذف شوند.
+```json
+{
+  "SHOPS": { "lat": "latitude", "lng": "longitude" },
+  "CONFIRMED": { "offers": { "price": "price_toman" } }
+}
+```
+
+## ۲) ایمپورت
+
+```bash
+# فایل‌ها: products.csv | offers.csv | shops.csv  (JSON تک‌آرایه هم پشتیبانی می‌شود)
+DATABASE_URL='postgresql://user:pass@host:5432/db' npm run import:pg -- ./data
+# یا با PG_URI (روش مستندات لیارا)
+PG_URI='postgresql://…' npm run import:pg -- ./data --dry   # فقط بررسی، بدون نوشتن
+```
+
+`psql` هم کافی است (`\copy shops FROM 'shops.csv' WITH CSV HEADER`)، ولی `import:pg` ارقام فارسی، JSON خراب، BOM و `null` متنی را هم نرمال می‌کند.
+
+## ۳) قاعده‌های پاک‌سازی (اعمال‌شده در `src/data/loader.js`)
+
+- BOM حذف، ارقام فارسی/عربی → لاتین، `null`/`None` متنی → خالی.
+- مختصات غیرمتناهی یا خارج از ایران → «بدون موقعیت» (فروشگاه حذف نمی‌شود).
+- قیمت: خالی `missingPrice`، غیرعددی `badPrice`، ≤۰ `nonpositivePrice`، >۱۰۰ میلیارد `priceOutlier`، `1` یا ≥۶ رقم یکسان `placeholderPrice`.
+- `weekly_hours`: `{mon..sun:{status,shifts:[{start_time,end_time}]}}`؛ `status=closed` بسته، `declared` با شیفت، `unsupported` نامشخص؛ `00:00–00:00` جای‌خالی.
+- `contacts`: `[{channel:"phone"|"whatsapp"|…, display_number}]` → `tel`/`wa`/`bale`.
+- `payment_options`: `[{provider_name, channel, category_names, min_price_toman, max_price_toman}]`؛ فقط `channel=in_person` با سقف/کف معتبر و تطابق دسته «اقساط حضوری» حساب می‌شود.
+- `warranty`: `{provider, description, period_months}`؛ رشته‌ی `"None"` یعنی بدون گارانتی.
+
+## ۴) بررسی بعد از ایمپورت
+
+```bash
+curl -s "$APP_URL/api/status" | head -c 800   # اتصال، جدول‌ها، نگاشت، memoryMb
+curl -s "$APP_URL/api/meta"   | head -c 400   # ready/source/counts
+curl -s "$APP_URL/api/offers?pid=<شناسه>&lat=35.72&lng=51.41&rad=10" | head -c 400
+```
+
+اگر `source:"none"` بود، `status.dbInfo` و `mapping` را ببینید؛ اپ با پیام روشن بالا می‌ماند و داده‌ی ساختگی نشان نمی‌دهد.

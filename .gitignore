@@ -1,0 +1,11 @@
+node_modules/
+npm-debug.log*
+.env
+.env.*
+!.env.example
+coverage/
+*.log
+
+# دیتاست خام (بزرگ) — در دیتابیس لیارا نگهداری می‌شود، نه در گیت
+data/*.csv
+data/*.zip
