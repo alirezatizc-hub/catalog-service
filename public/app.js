@@ -158,13 +158,22 @@ function renderSource() {
   el.hidden = false;
   el.innerHTML = `<span class="tag ${meta.ready ? 'ok' : 'bad'}">${esc(src)}</span>` +
     (meta.ready ? ` <span class="hint">${fa(c.products)} محصول · ${fa(c.shops)} فروشگاه · ${fa(c.offers)} آفِر ثبت‌شده</span>` : ' <span class="hint">در حال خواندن داده از دیتابیس…</span>') +
-    (meta.db === 'postgres' ? ' <span class="tag info">پیگیری‌ها در دیتابیس ذخیره می‌شوند</span>' : meta.ready ? ' <span class="tag warn">پیگیری‌ها موقت‌اند (بدون دیتابیس)</span>' : '');
+    (meta.db === 'postgres' ? ' <span class="tag info">پیگیری‌ها در دیتابیس ذخیره می‌شوند</span>' : meta.ready ? ' <span class="tag warn">پیگیری‌ها موقت‌اند (بدون دیتابیس)</span>' : '') +
+    (meta.ai && meta.aiInfo ? ` <span class="tag info" title="فهم جمله با مدل؛ داده‌ی کاربر به BoxAPI می‌رود">هوش مصنوعی: ${esc(PD(String(meta.aiInfo.model)))}</span>` : '');
 }
 function notReady() {
   const st2 = meta.dataset || {};
   const why = st2.error || meta.error || '';
+  const hintTxt = st2.hint || (st2.migrate && st2.migrate.failed && st2.migrate.failed[0] && st2.migrate.failed[0].hint) || '';
+  const detail = st2.detail ? `<br><span class="hint">${esc(st2.detail)}</span>` : '';
   const d = say(`<b>دیتاست در دسترس نیست.</b><br><span class="hint">سرور بالا آمده ولی داده‌ی واقعی (PostgreSQL لیارا) خوانده نشد${why ? ' — <code>' + esc(why) + '</code>' : ''}. عمداً هیچ داده‌ی نمونه‌ای نشان نمی‌دهم.</span>
-   <div class="ch-row" style="margin-top:8px"><a class="btn sm ghost" href="/api/status" target="_blank" rel="noopener">گزارش اتصال و نگاشت ستون‌ها</a><button type="button" class="btn sm" id="nr-retry">تلاش دوباره</button></div>`);
+   ${hintTxt ? `<div class="box-warn" style="margin-top:8px">${esc(hintTxt)}</div>` : ''}${detail}
+   <div class="ch-row" style="margin-top:8px"><a class="btn sm ghost" href="/api/status" target="_blank" rel="noopener">گزارش اتصال و نگاشت ستون‌ها</a><button type="button" class="btn sm" id="nr-retry">تلاش دوباره</button></div>
+   <details class="why" style="margin-top:6px"><summary>چه کارهایی باید انجام شود؟</summary><ul class="warns">
+     <li>روی لیارا یک دیتابیس PostgreSQL بسازید و URI آن را در متغیر <code>PG_URI</code> یا <code>DATABASE_URL</code> همان اپ بگذارید، بعد اپ را دوباره دیپلوی کنید.</li>
+     <li>دیتاست را یک‌بار ایمپورت کنید: <code>npm run import:pg -- ./data</code></li>
+     <li>با <code>npm run doctor</code> دقیقاً ببینید کدام مرحله مشکل دارد.</li>
+   </ul></details>`);
   const b = d.querySelector('#nr-retry'); if (b) b.onclick = () => { meta = null; start(); };
 }
 function waitingDataset() {

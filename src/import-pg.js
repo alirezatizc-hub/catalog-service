@@ -22,7 +22,11 @@ const dir = path.resolve(args.find(a => !a.startsWith('--')) || process.env.DATA
     const h = await db.health(pool);
     if (!h.connected) throw new Error('اتصال به دیتابیس برقرار نشد: ' + h.error);
     console.log('متصل شد به', h.database, '|', h.version);
-    await db.migrate(pool);
+    const mig = await db.migrate(pool);
+    if (mig.failed.length) {
+      console.error('⚠ مهاجرت جدول‌های برنامه با خطا مواجه شد (ایمپورت دیتاست ادامه می‌یابد):');
+      for (const f of mig.failed) console.error('  - ' + f.step + ': ' + (f.code || '') + ' ' + f.message + (f.hint ? '\n    راهنما: ' + f.hint : ''));
+    } else console.log('مهاجرت جدول‌های برنامه: ' + mig.applied.length + ' گام انجام شد');
     const pre = db.PREFIX();
     const tables = { products: readTable(dir, 'products'), offers: readTable(dir, 'offers'), shops: readTable(dir, 'shops') };
     for (const t of db.TABLES) {

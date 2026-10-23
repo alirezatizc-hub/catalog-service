@@ -312,3 +312,13 @@ input[type=range]{width:100%;accent-color:var(--brand);min-height:30px}
 .hub-pin{background:none;border:0}
 .hub-pin span{position:relative;display:grid;place-items:center;min-width:34px;height:26px;padding:0 6px;border-radius:9px;background:#7c3aed;color:#fff;font:800 12px/1 Vazirmatn,sans-serif;box-shadow:0 2px 6px rgb(0 0 0/.35)}
 .hub-pin span::after{content:'';position:absolute;bottom:-4px;left:50%;translate:-50% 0;border:4px solid transparent;border-top-color:#7c3aed}
+
+/* صفحه‌ی عیب‌یابی (/doctor) */
+.doctor{background:var(--bg);color:var(--text);font-family:Vazirmatn,system-ui,sans-serif;padding:16px}
+.doctor .wrap{max-width:820px;margin:0 auto;display:grid;gap:12px}
+.doctor h1{font-size:20px;margin:0}
+.doctor h2{font-size:15px;margin:6px 0 0}
+.doctor .chks{list-style:none;margin:0;padding:0;display:grid;gap:8px}
+.doctor .chk{border:1px solid var(--line);border-radius:12px;padding:9px 11px;background:var(--surface);display:grid;gap:4px}
+.doctor .chk .row{display:flex;justify-content:space-between;gap:8px}
+.doctor code{font-family:ui-monospace,monospace;background:var(--surface2);border-radius:6px;padding:0 4px;direction:ltr;display:inline-block}

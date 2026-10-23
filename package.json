@@ -7,7 +7,10 @@
     "start": "node server.js",
     "import:pg": "node src/import-pg.js",
     "test": "node --test test/*.test.js",
-    "bench": "node --expose-gc scripts/bench.js"
+    "bench": "node --expose-gc scripts/bench.js",
+    "doctor": "node scripts/doctor.js",
+    "ai:check": "node scripts/ai-check.js",
+    "ai:mock": "node scripts/mock-ai.js"
   },
   "dependencies": {
     "pg": "^8.13.0"

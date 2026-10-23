@@ -55,8 +55,14 @@ const qi = s => '"' + String(s).replace(/"/g, '""') + '"';
 const PREFIX = (env = process.env) => String(env.PG_TABLE_PREFIX || '').replace(/[^a-z0-9_]/gi, '');
 
 /* ───────── مهاجرت جداول برنامه ───────── */
+// هر مهاجرت یک گام جداست تا یک خطا کل بارگذاری داده را از کار نیندازد.
+// نکته‌ی مهم: ایندکس/UNIQUE روی عبارت‌های «غیرقطعی» مثل now() یا created_at::date
+// در PostgreSQL رد می‌شود (کد 42P17: functions in index expression must be marked IMMUTABLE)
+// چون تبدیل timestamptz به date به TimeZone نشست وابسته است. به‌جایش یک ستون واقعی
+// created_day نگه می‌داریم که مقدار پیش‌فرضش روز تهران است.
+const DAY_DEFAULT = "(now() AT TIME ZONE 'Asia/Tehran')::date";
 const MIGRATIONS = [
-  `CREATE TABLE IF NOT EXISTS inquiries(
+  { name: 'inquiries', sql: `CREATE TABLE IF NOT EXISTS inquiries(
     id BIGSERIAL PRIMARY KEY,
     client_id TEXT NOT NULL,
     shop_id TEXT NOT NULL,
@@ -69,11 +75,11 @@ const MIGRATIONS = [
     availability TEXT,
     answer TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT now())`,
-  'CREATE INDEX IF NOT EXISTS inquiries_client_idx ON inquiries(client_id, created_at DESC)',
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now())` },
+  { name: 'inquiries_client_idx', sql: 'CREATE INDEX IF NOT EXISTS inquiries_client_idx ON inquiries(client_id, created_at DESC)' },
   // درخواست تماس/استعلام: صف کار برای تیم عملیات یا اتصال آینده به سرویس تماس.
   // هیچ‌وقت خارج از ساعت کاری فروشگاه یا بدون رضایت کاربر ساخته نمی‌شود.
-  `CREATE TABLE IF NOT EXISTS call_requests(
+  { name: 'call_requests', sql: `CREATE TABLE IF NOT EXISTS call_requests(
     id BIGSERIAL PRIMARY KEY,
     client_id TEXT NOT NULL,
     shop_id TEXT NOT NULL,
@@ -89,9 +95,16 @@ const MIGRATIONS = [
     answer TEXT,
     availability TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT now())`,
-  'CREATE UNIQUE INDEX IF NOT EXISTS call_requests_daily_idx ON call_requests(client_id, shop_id, product_id, topic, (created_at::date))',
-  `CREATE TABLE IF NOT EXISTS watches(
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now())` },
+  // روزِ تهران برای سقف «یک درخواست در روز». اگر نسخه‌ی PostgreSQL عبارت AT TIME ZONE را
+  // در ستون پیش‌فرض نپذیرد، به CURRENT_DATE عقب‌نشینی می‌کنیم تا جدول/ایندکس ساخته شود.
+  { name: 'call_requests.created_day', sql: `ALTER TABLE call_requests ADD COLUMN IF NOT EXISTS created_day DATE NOT NULL DEFAULT ${DAY_DEFAULT}`,
+    fallback: ['ALTER TABLE call_requests ADD COLUMN IF NOT EXISTS created_day DATE NOT NULL DEFAULT CURRENT_DATE'] },
+  // ایندکس قدیمی روی عبارت (created_at::date) — اگر در نسخه‌ی پیشین ساخته شده بود، برداشته می‌شود.
+  { name: 'call_requests_daily_idx_legacy', sql: 'DROP INDEX IF EXISTS call_requests_daily_idx' },
+  { name: 'call_requests_daily_day_idx', sql: 'CREATE UNIQUE INDEX IF NOT EXISTS call_requests_daily_day_idx ON call_requests(client_id, shop_id, product_id, topic, created_day)' },
+  { name: 'call_requests_client_idx', sql: 'CREATE INDEX IF NOT EXISTS call_requests_client_idx ON call_requests(client_id, created_at DESC)' },
+  { name: 'watches', sql: `CREATE TABLE IF NOT EXISTS watches(
     id BIGSERIAL PRIMARY KEY,
     client_id TEXT NOT NULL,
     product_id TEXT NOT NULL,
@@ -102,10 +115,65 @@ const MIGRATIONS = [
     last_state TEXT,
     notified_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT now())`,
-  'CREATE UNIQUE INDEX IF NOT EXISTS watches_unique_idx ON watches(client_id, product_id, COALESCE(shop_id, \'*\'))'
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now())` },
+  { name: 'watches_unique_idx', sql: "CREATE UNIQUE INDEX IF NOT EXISTS watches_unique_idx ON watches(client_id, product_id, COALESCE(shop_id, '*'))" }
 ];
-async function migrate(pool) { for (const sql of MIGRATIONS) await pool.query(sql); }
+
+// پیام خطا را از رشته‌ی اتصال/رمز پاک می‌کند تا در /api/status و لاگ نشت نکند
+function scrub(msg) {
+  return String(msg == null ? '' : msg)
+    .replace(/postgres(ql)?:\/\/[^\s'"]+/gi, 'postgresql://***')
+    .replace(/(password\s*=\s*)[^\s;&]+/gi, '$1***')
+    .slice(0, 400);
+}
+
+// توضیح فارسی برای خطاهای رایج اتصال/داده — همان چیزی که در /api/status و رابط دیده می‌شود
+function hintFor(code, message = '') {
+  const c = String(code || '');
+  const m = String(message || '');
+  if (c === '42P17') return 'تعریف جدول/ایندکس داخلی برنامه با این نسخه‌ی PostgreSQL سازگار نیست (مهاجرت). این نسخه مشکل را برطرف می‌کند؛ بعد از دیپلوی دوباره /api/status را ببینید.';
+  if (c === 'dataset_tables_not_found') return 'اتصال به دیتابیس برقرار شد، ولی جدول‌های products/offers/shops پیدا نشد. نام جدول‌ها و PG_TABLE_PREFIX را در /api/status ببینید.';
+  if (c === '28P01') return 'رمز یا نام کاربری PostgreSQL پذیرفته نشد؛ مقدار PG_URI/DATABASE_URL را در پنل لیارا بررسی کنید.';
+  if (c === '3D000') return 'چنین دیتابیسی روی سرور نیست؛ نام دیتابیس در رشته‌ی اتصال را بررسی کنید.';
+  if (c === '42501') return 'کاربر دیتابیس اجازه‌ی خواندن جدول‌ها را ندارد؛ دسترسی SELECT را بدهید.';
+  if (c === '42P01') return 'جدول موردنیاز وجود ندارد؛ دستور npm run doctor را اجرا کنید.';
+  if (['ECONNREFUSED', 'ENOTFOUND', 'ETIMEDOUT', 'EHOSTUNREACH'].includes(c)) return 'به دیتابیس دسترسی شبکه‌ای نیست؛ اگر دیتابیس خصوصی است، اپ باید در همان شبکه‌ی لیارا باشد.';
+  if (/password|authentication/i.test(m)) return 'احراز هویت دیتابیس رد شد؛ مقدار PG_URI/DATABASE_URL را بررسی کنید.';
+  if (/permission denied/i.test(m)) return 'دسترسی کافی نیست؛ مالک/مجوز جدول‌ها را بررسی کنید.';
+  if (c === 'dataset_not_available') return 'نه دیتابیس جواب داد و نه فایل محلی معتبری در DATA_DIR بود.';
+  return null;
+}
+
+async function migrate(pool) {
+  const out = { ok: true, applied: [], failed: [], degraded: false };
+  for (const step of MIGRATIONS) {
+    const tries = [step.sql, ...(step.fallback || [])];
+    let lastErr = null, done = false;
+    for (let i = 0; i < tries.length && !done; i++) {
+      try {
+        await pool.query(tries[i]);
+        out.applied.push(step.name + (i ? ' (fallback)' : ''));
+        if (i) out.degraded = true;
+        done = true;
+      } catch (e) { lastErr = e; }
+    }
+    if (!done) {
+      out.ok = false;
+      out.failed.push({ step: step.name, code: lastErr.code || null, message: scrub(lastErr.message), hint: hintFor(lastErr.code, lastErr.message) });
+      console.error(JSON.stringify({ event: 'migration_failed', step: step.name, code: lastErr.code || null, message: scrub(lastErr.message) }));
+    }
+  }
+  return out;
+}
+
+// جدول‌های کاربردی برنامه واقعاً ساخته شده‌اند؟ (اگر نه، استور حافظه‌ای امن‌تر است)
+async function appTables(pool) {
+  try {
+    const r = await pool.query(`SELECT table_name FROM information_schema.tables
+      WHERE table_schema = current_schema() AND table_name IN ('inquiries','call_requests','watches')`);
+    return new Set(r.rows.map(x => x.table_name));
+  } catch { return new Set(); }
+}
 
 /* ───────── کشف جدول‌های دیتاست ───────── */
 async function tableColumns(pool) {
@@ -271,9 +339,20 @@ function pgStore(pool) {
     },
     calls: {
       async add(x) {
-        const r = await pool.query(`INSERT INTO call_requests(client_id,shop_id,product_id,topic,question,phone,status,earliest_at) VALUES($1,$2,$3,$4,$5,$6,'queued',$7)
-          ON CONFLICT (client_id, shop_id, product_id, topic, (created_at::date)) DO UPDATE SET question=EXCLUDED.question, earliest_at=EXCLUDED.earliest_at, updated_at=now()
-          RETURNING ${callCols}`, [x.client, x.shop, x.product, x.topic, x.question, x.phone || null, x.earliest || null]);
+        const vals = [x.client, x.shop, x.product, x.topic, x.question, x.phone || null, x.earliest || null];
+        const insert = `INSERT INTO call_requests(client_id,shop_id,product_id,topic,question,phone,status,earliest_at) VALUES($1,$2,$3,$4,$5,$6,'queued',$7)`;
+        // یک درخواست برای هر (کاربر، فروشگاه، محصول، موضوع) در هر روز تهران
+        let r;
+        try {
+          r = await pool.query(`${insert} ON CONFLICT (client_id, shop_id, product_id, topic, created_day)
+            DO UPDATE SET question=EXCLUDED.question, earliest_at=EXCLUDED.earliest_at, updated_at=now() RETURNING ${callCols}`, vals);
+        } catch (e) {
+          // اگر ستون created_day یا ایندکس یکتایش روی این دیتابیس نبود (42703/42P10)،
+          // حداقل درخواست را ذخیره کن تا صف تماس از کار نیفتد.
+          const c = String(e.code || '');
+          if (!['42703', '42P10'].includes(c) && !/no unique or exclusion constraint/i.test(String(e.message))) throw e;
+          r = await pool.query(`${insert} RETURNING ${callCols}`, vals);
+        }
         return PUB_CALL(r.rows[0]);
       },
       async list(client) { const r = await pool.query(`SELECT ${callCols} FROM call_requests WHERE client_id=$1 ORDER BY created_at DESC LIMIT 80`, [client]); return r.rows.map(PUB_CALL); },
@@ -291,11 +370,17 @@ function pgStore(pool) {
     },
     watches: {
       async add(x) {
-        const r = await pool.query(`INSERT INTO watches(client_id,product_id,shop_id,target_price,lat,lng,rad,active)
-          VALUES($1,$2,$3,$4,$5,$6,$7,true)
-          ON CONFLICT (client_id, product_id, COALESCE(shop_id, '*')) DO UPDATE SET target_price=COALESCE(EXCLUDED.target_price, watches.target_price),
+        const vals = [x.client, x.product, x.shop || null, x.target ?? null, x.lat ?? null, x.lng ?? null, x.rad ?? null];
+        const insert = `INSERT INTO watches(client_id,product_id,shop_id,target_price,lat,lng,rad,active) VALUES($1,$2,$3,$4,$5,$6,$7,true)`;
+        let r;
+        try {
+          r = await pool.query(`${insert} ON CONFLICT (client_id, product_id, COALESCE(shop_id, '*')) DO UPDATE SET target_price=COALESCE(EXCLUDED.target_price, watches.target_price),
             lat=COALESCE(EXCLUDED.lat, watches.lat), lng=COALESCE(EXCLUDED.lng, watches.lng), rad=COALESCE(EXCLUDED.rad, watches.rad), active=true, updated_at=now()
-          RETURNING ${watchCols}`, [x.client, x.product, x.shop || null, x.target ?? null, x.lat ?? null, x.lng ?? null, x.rad ?? null]);
+          RETURNING ${watchCols}`, vals);
+        } catch (e) {
+          if (!/42P10|no unique or exclusion constraint/i.test(String(e.code) + ' ' + e.message)) throw e;
+          r = await pool.query(`${insert} RETURNING ${watchCols}`, vals);
+        }
         return PUB_WATCH(r.rows[0]);
       },
       async list(client) { const r = await pool.query(`SELECT ${watchCols} FROM watches WHERE client_id=$1 ORDER BY created_at DESC LIMIT 100`, [client]); return r.rows.map(PUB_WATCH); },
@@ -322,6 +407,6 @@ async function health(pool) {
 }
 
 module.exports = {
-  config, createPool, migrate, importTable, memoryStore, pgStore, createStore, health,
+  config, createPool, migrate, appTables, hintFor, scrub, MIGRATIONS, importTable, memoryStore, pgStore, createStore, health,
   tableColumns, detectDatasetTables, pageRows, envReport, TABLES, PREFIX, ENV
 };
