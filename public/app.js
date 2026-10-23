@@ -199,7 +199,7 @@ async function txt(q) {
     try { i = meta.ai ? await post('/api/chat', { message: q }, 20000) : await api('/api/interpret', { q }); }
     catch { i = await api('/api/interpret', { q }); }
   } catch { return fail(() => txt(q)); }
-  if (!i.cat) return bot('محصولی با این عبارت پیدا نشد. یکی از دسته‌ها را انتخاب کنید یا دقیق‌تر بنویسید.').then(() => start());
+  if (!i.cat) { if (i.reply) return bot((i.source === 'llm' ? `<span class="tag info">${icon('spark')} هوش مصنوعی</span> ` : '') + esc(i.reply)); return bot('محصولی با این عبارت پیدا نشد. یکی از دسته‌ها را انتخاب کنید یا دقیق‌تر بنویسید.').then(() => start()); }
   st.cat = i.cat; st.sel = { ...i.sel }; st.skip = new Set(); st.auto = new Set(); st.order = Object.keys(st.sel);
   const f = i.filters || {}; st.min = f.min || ''; st.max = f.max || ''; for (const [a, b] of [['inst', 'inst'], ['open', 'open'], ['tp', 'torobpay'], ['kb', 'kalabarg'], ['ex', 'express']]) st.f[a] = f[b] ? 1 : 0; if (f.sort) st.sort = f.sort;
   crumbs();
