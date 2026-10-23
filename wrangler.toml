@@ -3,11 +3,15 @@ main = "worker.js"
 compatibility_date = "2026-10-23"
 compatibility_flags = ["nodejs_compat"]
 
-# Stage 1 migration: static assets are deliberately disabled until the API worker is complete.
-# Configure the Hyperdrive ID after creating the Liara PostgreSQL connection.
+# Stage 1 migration: no static assets are configured.
+# Bind a PREVIEW-safe Hyperdrive config only when it exists; never point preview at production by accident.
 [[hyperdrive]]
 binding = "HYPERDRIVE"
 id = "REPLACE_WITH_LIARA_POSTGRES_HYPERDRIVE_ID"
+
+[[previews.hyperdrive]]
+binding = "HYPERDRIVE"
+id = "REPLACE_WITH_PREVIEW_SAFE_HYPERDRIVE_ID"
 
 [observability]
 enabled = true
